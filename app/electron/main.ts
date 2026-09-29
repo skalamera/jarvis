@@ -80,6 +80,7 @@ function createWindow(): void {
     minWidth: 980,
     minHeight: 640,
     title: "J.A.R.V.I.S.",
+    icon: path.join(ASSETS, "icon.png"),
     backgroundColor: "#01040a",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 14 },
@@ -122,16 +123,12 @@ function summon(listen: boolean): void {
 }
 
 // ------------------------------------------------------------------ tray (menu bar)
+const ASSETS = path.join(__dirname, "..", "assets");
+
 function trayIcon(): Electron.NativeImage {
-  // 18px template glyph: concentric rings (arc reactor), drawn as SVG
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">
-    <circle cx="18" cy="18" r="15" fill="none" stroke="black" stroke-width="2.5"/>
-    <circle cx="18" cy="18" r="9" fill="none" stroke="black" stroke-width="2.5" stroke-dasharray="4 3"/>
-    <circle cx="18" cy="18" r="3.5" fill="black"/></svg>`;
-  const img = nativeImage.createFromDataURL("data:image/svg+xml;base64," + Buffer.from(svg).toString("base64"));
-  const sized = img.resize({ width: 18, height: 18 });
-  sized.setTemplateImage(true);
-  return sized;
+  // full-colour JARVIS logo; tray.png (22px) + tray@2x.png (44px) are picked up for Retina automatically
+  const img = nativeImage.createFromPath(path.join(ASSETS, "tray.png"));
+  return img.isEmpty() ? nativeImage.createEmpty() : img;
 }
 
 function buildTray(): void {
@@ -176,8 +173,12 @@ app.whenReady().then(async () => {
     token: externalCore ? process.env.JARVIS_TOKEN || "" : TOKEN,
   }));
   ipcMain.on("jarvis:open", (_e, url: string) => {
-    if (/^https?:\/\//.test(url)) shell.openExternal(url);
+    if (/^https?:\/\//.test(url) || /^tel:\+?[\d()\-. ]{3,20}$/.test(url)) shell.openExternal(url);
   });
+  if (process.platform === "darwin" && app.dock) {
+    const dockImg = nativeImage.createFromPath(path.join(ASSETS, "icon.png"));
+    if (!dockImg.isEmpty()) app.dock.setIcon(dockImg); // dev runs show the JARVIS icon in the Dock too
+  }
   await startCore();
   createWindow();
   buildTray();

@@ -73,7 +73,7 @@ export interface BriefData {
 
 export interface BriefState { data: BriefData | null; refreshing: boolean; error: string }
 
-export interface Toast { id: string; text: string; undoItem?: string; error?: boolean }
+export interface Toast { id: string; text: string; undoItem?: string; onUndo?: () => void; error?: boolean }
 
 declare global {
   interface Window {

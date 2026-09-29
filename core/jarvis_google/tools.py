@@ -232,6 +232,13 @@ def gmail_untrash(account: str, message_ids: list[str]) -> dict:
     return {"status": "restored", "account": account, "message_ids": message_ids}
 
 
+def gmail_restore(account: str, message_ids: list[str]) -> dict:
+    """Undo for a click-trash: untrash AND put back in the inbox (Gmail's untrash alone doesn't)."""
+    r = gmail_untrash(account, message_ids)
+    gmail_labels_now(account, message_ids, add=["INBOX"])
+    return r
+
+
 def gmail_labels_now(account: str, message_ids: list[str], add: list[str] | None = None,
                      remove: list[str] | None = None) -> dict:
     """Quiet label change (archive / mark read / undo) with no HUD feed card."""
@@ -675,3 +682,13 @@ def contacts_search(account: str, query: str, max_results: int = 10) -> dict:
             out.setdefault(m["from_email"].lower(), {"name": m["from_name"], "emails": [m["from_email"]],
                                                      "phones": [], "org": "", "source": "gmail"})
     return {"account": account, "query": query, "contacts": list(out.values())[:max_results]}
+
+
+# ====================================================================== weather (no Google; lives here for the feed)
+def weather_lookup(location: str = "", days: int = 7, units: str = "") -> dict:
+    from .weather import weather
+    try:
+        r = weather(location, days, units)
+    except ValueError as e:
+        return {"error": str(e)}
+    return _feed("weather", None, {"location": location}, r)

@@ -4,6 +4,10 @@ import type { Card } from "../types";
 import { CalendarCard, ConfirmCard, DocumentCard, DraftEditor, EmailList, EmailView, FilesCard, NoticeCard, ThreadView, acctTag } from "./Cards";
 import { ChartCard, ImageCard, LinkCard, ListCard, StatsCard, TableCard, VisualMarkdown } from "./Visuals";
 import { MapCard } from "./MapCard";
+import { WeatherCard } from "./WeatherCard";
+import { PylonList, PylonTicket } from "./PylonCards";
+import { PlaceCard, PlacesList } from "./PlaceCards";
+import { DirectionsCard } from "./DirectionsCard";
 
 const BODY: Record<string, (p: { card: Card }) => React.ReactElement> = {
   email_list: EmailList,
@@ -23,12 +27,18 @@ const BODY: Record<string, (p: { card: Card }) => React.ReactElement> = {
   "visual.link": LinkCard,
   "visual.markdown": VisualMarkdown,
   "visual.map": MapCard,
+  weather: WeatherCard,
+  pylon_list: PylonList,
+  pylon_ticket: PylonTicket,
+  places: PlacesList,
+  place: PlaceCard,
+  directions: DirectionsCard,
 };
 
 const KIND_LABEL: Record<string, string> = {
   email_list: "MAIL", email: "MESSAGE", thread: "THREAD", draft: "DRAFT", confirm: "AUTHORIZE", calendar: "CALENDAR",
   files: "DRIVE", document: "DOCUMENT", notice: "STATUS", "visual.chart": "ANALYSIS", "visual.stats": "TELEMETRY",
-  "visual.table": "DATA", "visual.list": "INDEX", "visual.image": "IMAGE", "visual.link": "LINK", "visual.markdown": "BRIEF", "visual.map": "NAVIGATION",
+  "visual.table": "DATA", "visual.list": "INDEX", "visual.image": "IMAGE", "visual.link": "LINK", "visual.markdown": "BRIEF", "visual.map": "NAVIGATION", weather: "WEATHER", pylon_list: "PYLON", pylon_ticket: "TICKET", places: "PLACES", place: "PLACE", directions: "ROUTE",
 };
 
 export function HoloCard({ card, index }: { card: Card; index: number }) {

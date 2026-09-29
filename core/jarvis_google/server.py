@@ -15,6 +15,9 @@ try:  # mcp >= 2
 except ImportError:  # mcp 1.x
     from mcp.server.fastmcp import FastMCP  # type: ignore[no-redef]
 
+from . import places as PL
+from . import routes as RT
+from . import pylon as P
 from . import tools as T
 from .accounts import AccountError
 
@@ -208,6 +211,54 @@ def sheets_write(account: str, spreadsheet_id: str, range_a1: str, values: list[
     """Propose writing/appending rows to a Sheet. Requires confirmation."""
     return _safe(T.sheets_write, account=account, spreadsheet_id=spreadsheet_id, range_a1=range_a1, values=values,
                  append=append)
+
+
+@mcp.tool()
+def weather(location: str = "", days: int = 7, units: str = "") -> str:
+    """Current conditions + next 24 hours + daily forecast (up to 14 days). Leave location empty for
+    Stephen's current location (from his Mac's IP). location examples: 'New York, NY', 'London', 'Paris, France'.
+    units: '' (auto: imperial in the US), 'imperial' or 'metric'. The HUD renders a weather visual automatically."""
+    return _safe(T.weather_lookup, location=location, days=days, units=units)
+
+
+@mcp.tool()
+def directions(destination: str, origin: str = "", mode: str = "driving", avoid_tolls: bool = False,
+               avoid_highways: bool = False) -> str:
+    """Turn-by-turn directions with live traffic (Google Routes). origin empty = where Stephen is now.
+    mode: driving | transit | walking | bicycling. Returns ETA, distance, traffic delay, alternatives and every step.
+    The HUD renders a directions card (map + steps + mode switch) automatically."""
+    return _safe(RT.directions, destination=destination, origin=origin, mode=mode, avoid_tolls=avoid_tolls,
+                 avoid_highways=avoid_highways)
+
+
+@mcp.tool()
+def places_search(query: str, near: str = "", limit: int = 6, open_now: bool = False) -> str:
+    """Google Places search: restaurants, bars, cafes, shops, any business. Biased to where Stephen is unless `near`
+    names a place. Returns rating, review count, price, type, open/closed, address. The HUD shows a photo list
+    card automatically; Stephen can click one for its full card."""
+    return _safe(PL.places_search, query=query, near=near, limit=limit, open_now=open_now)
+
+
+@mcp.tool()
+def place_details(place_id: str = "", query: str = "") -> str:
+    """Full Google card for ONE place (by place_id from places_search, or a query like "O Mandarin Hartsdale"):
+    photos, hours, Google review summary, recent reviews, phone, website, reservations. Renders a place card."""
+    return _safe(PL.place_details, place_id=place_id, query=query)
+
+
+@mcp.tool()
+def pylon_tickets(query: str = "", mine: bool = True, states: list[str] | None = None, limit: int = 15) -> str:
+    """Pylon support tickets. Default (no args): Stephen's open tickets, newest activity first.
+    query: free text (customer, account, topic) or a ticket number like "17747". mine=False searches everyone's.
+    states: any of new, waiting_on_you, waiting_on_customer, on_hold, closed (default: all open).
+    The HUD renders actionable ticket cards automatically; Stephen changes tickets with the card buttons."""
+    return _safe(P.pylon_tickets, query=query, mine=mine, states=states, limit=limit)
+
+
+@mcp.tool()
+def pylon_ticket(number: str) -> str:
+    """One Pylon ticket by number (e.g. "17747") with its recent thread. Renders an actionable ticket card."""
+    return _safe(P.pylon_ticket, number=number)
 
 
 @mcp.tool()

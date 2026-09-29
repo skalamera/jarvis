@@ -358,7 +358,20 @@ class Briefing:
             return {"ok": False, "error": f"Unknown action {action}"}
         self._detach(item_id, undo)
         await self.publish()
-        return {"ok": True, "text": text, "item_id": item_id, "undoable": action != "reply_send"}
+        return {"ok": True, "text": text, "item_id": item_id, "undoable": action != "reply_send",
+                "trashed_ids": [m["id"] for m in msgs] if action == "trash" else []}
+
+    async def forget_messages(self, message_ids: list[str]) -> int:
+        """An email was trashed elsewhere (HUD card / AUTHORIZE): drop any briefing item that contains it."""
+        ids = set(message_ids)
+        if not ids or not self.data:
+            return 0
+        gone = [it["id"] for it in self._all_items(self.data) if ids & {m["id"] for m in it["messages"]}]
+        for item_id in gone:
+            self._detach(item_id, None)
+        if gone:
+            await self.publish()
+        return len(gone)
 
     async def _undo(self, item_id: str) -> dict:
         rec = self.removed.pop(item_id, None)

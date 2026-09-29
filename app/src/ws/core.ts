@@ -3,6 +3,8 @@ import { useStore } from "../state/store";
 import { Microphone, Speaker } from "../voice/audio";
 import type { Card } from "../types";
 
+const TRASH_KINDS = new Set(["gmail_trash", "gmail_delete_permanently"]);
+
 type Cfg = { coreUrl: string; httpUrl: string; token: string };
 
 class CoreLink {
@@ -13,6 +15,8 @@ class CoreLink {
   private retry = 0;
   private pingTimer: number | undefined;
   private levelRaf = 0;
+  private pylonSeq = 0;
+  private pylonWait = new Map<string, (m: any) => void>();
 
   async init(): Promise<void> {
     this.cfg = window.jarvis
@@ -84,6 +88,31 @@ class CoreLink {
     useStore.getState().addMessage({ id: `s_${Date.now()}`, role: "system", text, at: Date.now() });
   }
 
+  /** Remove every card showing these (now trashed) emails; with an account, offer an UNDO that restores both. */
+  private removeTrashed(ids: string[], account: string | null): void {
+    const s = useStore.getState();
+    if (!ids.length) return;
+    const before = s.cards;
+    s.forgetMessages(ids);
+    const after = new Map(useStore.getState().cards.map((c) => [c.id, c]));
+    const changed = before.map((c, i) => ({ c, i })).filter(({ c }) => after.get(c.id) !== c);
+    if (!account) return;
+    s.toast({
+      text: ids.length > 1 ? `${ids.length} emails moved to Trash.` : "Moved to Trash.",
+      onUndo: () => {
+        this.direct("gmail_restore", { account, message_ids: ids });
+        const st = useStore.getState();
+        const cards = st.cards.slice();
+        for (const { c, i } of changed) {
+          const j = cards.findIndex((x) => x.id === c.id);
+          if (j >= 0) cards[j] = c;
+          else cards.splice(Math.min(i, cards.length), 0, c);
+        }
+        st.set({ cards });
+      },
+    });
+  }
+
   private card(raw: any, turnId?: string): Card {
     return { ...raw, turnId, createdAt: Date.now(), status: raw.kind === "confirm" ? raw.data?.status ?? "pending" : undefined };
   }
@@ -151,15 +180,31 @@ class CoreLink {
         if (c.kind === "confirm") this.speaker?.chime("alert");
         break;
       }
-      case "action_result":
+      case "action_result": {
         s.updateCard(m.action_id, { status: m.status, result: m.result });
+        const c = s.cards.find((x) => x.id === m.action_id);
+        if (m.status === "executed" && c && TRASH_KINDS.has(c.data?.kind)) {
+          // Deleted via voice/AUTHORIZE: the emails are gone, so drop their cards and fold the AUTHORIZE card away.
+          this.removeTrashed(c.data?.message_ids ?? [], null);
+          window.setTimeout(() => useStore.getState().removeCard(m.action_id), 1400);
+        }
         break;
+      }
       case "draft_saved":
         window.dispatchEvent(new CustomEvent("jarvis:draft_saved", { detail: m }));
         break;
       case "direct_result":
         window.dispatchEvent(new CustomEvent("jarvis:direct_result", { detail: m }));
-        if (!m.ok) this.system(`Action failed: ${m.error}`);
+        if (!m.ok) {
+          this.system(`Action failed: ${m.error}`);
+          if (m.op === "gmail_trash_now") s.toast({ text: `Delete failed: ${m.error}`, error: true });
+        } else if (m.op === "gmail_trash_now") {
+          const ids: string[] = m.result?.message_ids ?? [];
+          const account: string = m.result?.account ?? m.args?.account;
+          this.removeTrashed(ids, account);
+        } else if (m.op === "gmail_restore") {
+          s.toast({ text: "Restored to inbox." });
+        }
         break;
       case "speech":
         if (m.audio) this.speaker?.enqueue(m.turn_id, m.seq, m.audio, m.text);
@@ -182,6 +227,15 @@ class CoreLink {
       case "briefing":
         s.set({ briefing: { data: m.data ?? null, refreshing: !!m.refreshing, error: m.error || "" } });
         break;
+      case "toast":
+        useStore.getState().toast({ text: m.text, error: !!m.error });
+        break;
+      case "rpc_result":
+      case "pylon_result": {
+        const w = this.pylonWait.get(m.req);
+        if (w) { this.pylonWait.delete(m.req); w(m); }
+        break;
+      }
       case "briefing_result": {
         const busy = { ...s.briefBusy };
         delete busy[m.item_id];
@@ -189,6 +243,7 @@ class CoreLink {
         window.dispatchEvent(new CustomEvent("jarvis:briefing_result", { detail: m }));
         if (!m.ok) s.toast({ text: m.error || "Action failed.", error: true });
         else s.toast({ text: m.text, undoItem: m.undoable ? m.item_id : undefined });
+        if (m.ok && m.trashed_ids?.length) s.forgetMessages(m.trashed_ids);
         break;
       }
     }
@@ -244,6 +299,31 @@ class CoreLink {
   briefingRefresh(): void {
     this.send({ type: "briefing_refresh" });
   }
+  /** Click-only Pylon op (or options / AI draft). Resolves with Core's pylon_result for this request. */
+  pylon(op: string, args: Record<string, unknown>): Promise<{ ok: boolean; result?: any; error?: string }> {
+    const req = `p${++this.pylonSeq}`;
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => { this.pylonWait.delete(req); resolve({ ok: false, error: "Timed out waiting for Core." }); }, 120_000);
+      this.pylonWait.set(req, (m) => { window.clearTimeout(timer); resolve(m); });
+      this.send({ type: "pylon", op, args, req });
+    });
+  }
+
+  /** Read-only HUD request (allow-listed in Core), e.g. recompute directions for another travel mode. */
+  rpc(op: string, args: Record<string, unknown>): Promise<{ ok: boolean; result?: any; error?: string }> {
+    const req = `r${++this.pylonSeq}`;
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => { this.pylonWait.delete(req); resolve({ ok: false, error: "Timed out waiting for Core." }); }, 60_000);
+      this.pylonWait.set(req, (m) => { window.clearTimeout(timer); resolve(m); });
+      this.send({ type: "rpc", op, args, req });
+    });
+  }
+
+  /** Click on a place row: Core fetches the full Google card and pushes it through the feed. */
+  openPlace(placeId: string): void {
+    this.send({ type: "place_open", place_id: placeId });
+  }
+
   briefingAction(itemId: string, action: string, extra: Record<string, unknown> = {}): void {
     const s = useStore.getState();
     if (action !== "undo") s.set({ briefBusy: { ...s.briefBusy, [itemId]: action } });

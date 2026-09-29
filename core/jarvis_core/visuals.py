@@ -96,12 +96,28 @@ def cards_from_feed(item: dict) -> list[dict]:
         vals = r.get("values") or []
         return [card("visual.table", r.get("range", "Sheet"), {
             "type": "table", "columns": vals[0] if vals else [], "rows": vals[1:60]}, acct)]
+    if tool == "directions":
+        return [card("directions", f"To {r.get('destination', '')}", r)]
+    if tool == "places_search":
+        return [card("places", f"{r.get('query', 'Places')}" + (f" · near {r['near']}" if r.get("near") else ""), r)]
+    if tool == "place_details":
+        return [card("place", r.get("name", "Place"), r)]
+    if tool == "pylon_tickets":
+        return [card("pylon_list", f"Pylon · {r.get('query', 'tickets')}", r)]
+    if tool == "pylon_ticket":
+        return [card("pylon_ticket", f"#{r.get('number')} {r.get('title', '')}", r)]
+    if tool == "weather":
+        loc = r.get("location") or {}
+        place = ", ".join(x for x in (loc.get("name"), loc.get("region") if loc.get("country") == "US"
+                                      else loc.get("country")) if x)
+        return [card("weather", place or "Weather", r)]
     return []
 
 
 def action_card(action: dict) -> dict:
     return {"id": action["id"], "kind": "confirm", "title": action["summary"], "account": action["account"],
-            "data": {"kind": action["kind"], "preview": action["preview"], "status": action["status"]}}
+            "data": {"kind": action["kind"], "preview": action["preview"], "status": action["status"],
+                     "message_ids": (action.get("params") or {}).get("message_ids") or []}}
 
 
 # ---------------------------------------------------------------- tool labels for the live trace

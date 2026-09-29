@@ -4,6 +4,8 @@ import type { Account, BriefState, Card, HudState, Message, Telemetry, Toast, To
 interface Store {
   briefing: BriefState;
   rightTab: "briefing" | "displays";
+  displaysUnseen: number;
+  forgetMessages: (ids: string[]) => void;
   briefBusy: Record<string, string>;
   toasts: Toast[];
   toast: (t: Omit<Toast, "id">) => void;
@@ -41,12 +43,13 @@ const MAX_CARDS = 14;
 export const useStore = create<Store>((set, get) => ({
   briefing: { data: null, refreshing: false, error: "" },
   rightTab: "briefing",
+  displaysUnseen: 0,
   briefBusy: {},
   toasts: [],
   toast: (t) => {
     const id = Math.random().toString(36).slice(2);
     set((s) => ({ toasts: [...s.toasts.slice(-3), { ...t, id }] }));
-    window.setTimeout(() => get().dropToast(id), t.undoItem ? 7000 : 4000);
+    window.setTimeout(() => get().dropToast(id), t.undoItem || t.onUndo ? 7000 : 4000);
   },
   dropToast: (id) => set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) })),
   connected: false,
@@ -90,7 +93,23 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => {
       if (s.cards.some((x) => x.id === c.id)) return {};
       const cards = [c, ...s.cards].slice(0, MAX_CARDS);
-      return { cards, rightTab: "displays", focusCardId: c.kind === "confirm" ? c.id : s.focusCardId };
+      const focusCardId = c.kind === "confirm" ? c.id : s.focusCardId;
+      return { cards, rightTab: "displays", displaysUnseen: 0, focusCardId };
+    }),
+  forgetMessages: (ids) =>
+    set((s) => {
+      const gone = new Set(ids);
+      const cards: Card[] = [];
+      for (const c of s.cards) {
+        if (c.kind === "email" && gone.has(c.data?.id)) continue;
+        if (c.kind === "email_list" || c.kind === "thread") {
+          const msgs = (c.data?.messages ?? []).filter((m: any) => !gone.has(m.id));
+          if (!msgs.length) continue;
+          if (msgs.length !== (c.data?.messages ?? []).length) { cards.push({ ...c, data: { ...c.data, messages: msgs } }); continue; }
+        }
+        cards.push(c);
+      }
+      return { cards };
     }),
   updateCard: (id, p) => set((s) => ({ cards: s.cards.map((c) => (c.id === id ? { ...c, ...p } : c)) })),
   removeCard: (id) =>

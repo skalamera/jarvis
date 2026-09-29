@@ -225,6 +225,58 @@ function Caption() {
   );
 }
 
+const RIGHT_KEY = "jarvis.rightWidth";
+const CENTER_MIN = 520; // keep the reactor + conversation usable
+const clampRight = (w: number) => {
+  const left = document.querySelector("aside.left")?.getBoundingClientRect().width ?? 250;
+  return Math.round(Math.max(340, Math.min(w, window.innerWidth - left - CENTER_MIN)));
+};
+
+/** Restore the saved right-panel width (px) into the --right-w CSS variable. */
+function applyRightWidth(w: number | null) {
+  const root = document.documentElement;
+  if (w == null) root.style.removeProperty("--right-w");
+  else root.style.setProperty("--right-w", `${clampRight(w)}px`);
+}
+{
+  const saved = Number(localStorage.getItem(RIGHT_KEY));
+  if (saved > 0) applyRightWidth(saved);
+}
+
+/** Drag handle on the right panel's left edge. Drag to resize, double-click to reset. */
+function PanelResizer() {
+  const [drag, setDrag] = useState(false);
+  const d = useRef<{ x0: number; moved: boolean } | null>(null);
+  useEffect(() => {
+    const onWin = () => { const s = Number(localStorage.getItem(RIGHT_KEY)); if (s > 0) applyRightWidth(s); };
+    window.addEventListener("resize", onWin);
+    return () => window.removeEventListener("resize", onWin);
+  }, []);
+  const start = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    d.current = { x0: e.clientX, moved: false };
+    setDrag(true);
+    document.body.classList.add("resizing");
+  };
+  const move = (e: React.PointerEvent) => {
+    const s = d.current;
+    if (!s) return;
+    if (!s.moved && Math.abs(e.clientX - s.x0) < 3) return; // a click / double-click is not a resize
+    s.moved = true;
+    const w = clampRight(window.innerWidth - e.clientX);
+    applyRightWidth(w);
+    localStorage.setItem(RIGHT_KEY, String(w));
+  };
+  const end = () => { d.current = null; setDrag(false); document.body.classList.remove("resizing"); };
+  return (
+    <div className={`panel-resizer ${drag ? "on" : ""}`} title="Drag to resize · double-click to reset"
+      onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end}
+      onDoubleClick={() => { localStorage.removeItem(RIGHT_KEY); applyRightWidth(null); }} />
+  );
+}
+
 export function Hud() {
   const hud = useStore((s) => s.hud);
   const cards = useStore((s) => s.cards);
@@ -236,6 +288,7 @@ export function Hud() {
       <div className="drag-bar" />
       <header className="top">
         <div className="brand">
+          <img className="brand-logo" src="./brand/logo_64.png" alt="" draggable={false} />
           <span className="brand-mark">J.A.R.V.I.S.</span>
           <span className="brand-sub">JUST A RATHER VERY INTELLIGENT SYSTEM</span>
         </div>
@@ -256,6 +309,7 @@ export function Hud() {
         <Composer />
       </main>
       <aside className="right">
+        <PanelResizer />
         <RightPanel />
       </aside>
       <Toasts />
@@ -269,14 +323,16 @@ function RightPanel() {
   const b = useStore((s) => s.briefing);
   const setTab = (t: "briefing" | "displays") => useStore.getState().set({ rightTab: t });
   const n = b.data ? b.data.todos.length + b.data.priority.length : 0;
+  const unseen = useStore((s) => s.displaysUnseen);
+  const pending = cards.filter((c) => c.kind === "confirm" && (c.status ?? "pending") === "pending");
   return (
     <>
       <div className="panel-label right-label tabs">
         <button className={`rtab ${tab === "briefing" ? "on" : ""}`} onClick={() => setTab("briefing")}>
           BRIEFING {n > 0 && <span className="rtab-n">{n}</span>}
         </button>
-        <button className={`rtab ${tab === "displays" ? "on" : ""}`} onClick={() => setTab("displays")}>
-          DISPLAYS {cards.length > 0 && <span className="rtab-n">{cards.length}</span>}
+        <button className={`rtab ${tab === "displays" ? "on" : ""}`} onClick={() => useStore.getState().set({ rightTab: "displays", displaysUnseen: 0 })}>
+          DISPLAYS {cards.length > 0 && <span className={`rtab-n ${unseen > 0 && tab !== "displays" ? "fresh" : ""}`}>{cards.length}</span>}
         </button>
         {tab === "displays" && cards.length > 0 && (
           <button className="clear" onClick={() => {
@@ -286,7 +342,12 @@ function RightPanel() {
         )}
       </div>
       {tab === "briefing" ? (
-        <div className="cards"><Briefing /></div>
+        <div className="cards">
+          <AnimatePresence initial={false}>
+            {pending.map((c, i) => <HoloCard key={c.id} card={c} index={i} />)}
+          </AnimatePresence>
+          <Briefing />
+        </div>
       ) : (
         <div className="cards">
           <AnimatePresence initial={false}>
@@ -307,8 +368,12 @@ function Toasts() {
         {toasts.map((t) => (
           <motion.div key={t.id} className={`toast ${t.error ? "err" : ""}`} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }}>
             <span>{t.text}</span>
-            {t.undoItem && (
-              <button onClick={() => { core.briefingAction(t.undoItem!, "undo"); useStore.getState().dropToast(t.id); }}>UNDO</button>
+            {(t.undoItem || t.onUndo) && (
+              <button onClick={() => {
+                if (t.onUndo) t.onUndo();
+                else core.briefingAction(t.undoItem!, "undo");
+                useStore.getState().dropToast(t.id);
+              }}>UNDO</button>
             )}
           </motion.div>
         ))}

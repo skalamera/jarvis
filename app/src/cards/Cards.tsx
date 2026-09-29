@@ -9,6 +9,56 @@ const Btn = ({ children, onClick, tone = "cyan", disabled }: { children: React.R
   <button className={`hbtn hbtn-${tone}`} onClick={onClick} disabled={disabled}>{children}</button>
 );
 
+/** Delete in place: first click arms it ("Confirm delete?"), second click trashes right away (no AUTHORIZE card:
+ *  clicking this specific email twice is the confirmation). Recoverable from Trash; the toast offers UNDO. */
+function useTrash(account: string | null | undefined, ids: string[]) {
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = window.setTimeout(() => setArmed(false), 4000);
+    return () => window.clearTimeout(t);
+  }, [armed]);
+  useEffect(() => {
+    if (!busy) return;
+    const h = (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      if (d?.op === "gmail_trash_now" && !d.ok) { setBusy(false); setArmed(false); }
+    };
+    window.addEventListener("jarvis:direct_result", h);
+    return () => window.removeEventListener("jarvis:direct_result", h);
+  }, [busy]);
+  const click = () => {
+    if (busy) return;
+    if (!armed) return setArmed(true);
+    setBusy(true);
+    core.direct("gmail_trash_now", { account, message_ids: ids });
+  };
+  return { armed, busy, click, cancel: () => setArmed(false) };
+}
+
+function TrashIcon({ account, id }: { account?: string | null; id: string }) {
+  const t = useTrash(account, [id]);
+  return (
+    <button className={`row-trash ${t.armed ? "armed" : ""}`} title={t.armed ? "Click again to move to Trash" : "Delete"}
+      onClick={t.click} onMouseLeave={t.cancel} disabled={t.busy}>
+      {t.busy ? "…" : t.armed ? "Delete?" : "✕"}
+    </button>
+  );
+}
+
+function TrashBtn({ account, id }: { account?: string | null; id: string }) {
+  const t = useTrash(account, [id]);
+  return (
+    <>
+      <button className={`hbtn hbtn-red ${t.armed ? "armed" : ""}`} onClick={t.click} disabled={t.busy}>
+        {t.busy ? "Deleting…" : t.armed ? "Confirm delete" : "Trash"}
+      </button>
+      {t.armed && !t.busy && <button className="hbtn hbtn-ghost" onClick={t.cancel}>Keep</button>}
+    </>
+  );
+}
+
 // ------------------------------------------------------------------------ email list
 export function EmailList({ card }: { card: Card }) {
   const msgs: any[] = card.data?.messages ?? [];
@@ -34,7 +84,7 @@ export function EmailList({ card }: { card: Card }) {
           <div className="row-actions" onClick={(e) => e.stopPropagation()}>
             {m.unread && <button title="Mark read" onClick={() => { core.direct("gmail_modify", { account: card.account, message_ids: [m.id], mark_read: true }); m.unread = false; setGone(new Set(gone)); }}>✓</button>}
             <button title="Archive" onClick={() => { core.direct("gmail_modify", { account: card.account, message_ids: [m.id], archive: true }); setGone(new Set([...gone, m.id])); }}>⇩</button>
-            <button title="Trash (asks to confirm)" onClick={() => core.direct("gmail_trash", { account: card.account, message_ids: [m.id] })}>✕</button>
+            <TrashIcon account={card.account} id={m.id} />
           </div>
         </div>
       ))}
@@ -63,7 +113,7 @@ export function EmailView({ card }: { card: Card }) {
         <Btn onClick={() => core.sendText(`Draft a reply to the email from ${m.from_name || m.from_email} about "${m.subject}" (message id ${m.id}, ${card.account} account).`)}>Draft reply</Btn>
         <Btn tone="ghost" onClick={() => core.direct("gmail_read_thread", { account: card.account, thread_id: m.threadId })}>Full thread</Btn>
         <Btn tone="ghost" onClick={() => core.direct("gmail_modify", { account: card.account, message_ids: [m.id], archive: true })}>Archive</Btn>
-        <Btn tone="red" onClick={() => core.direct("gmail_trash", { account: card.account, message_ids: [m.id] })}>Trash</Btn>
+        <TrashBtn account={card.account} id={m.id} />
       </div>
     </div>
   );

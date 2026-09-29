@@ -17,10 +17,11 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
-from jarvis_google import store
+from jarvis_google import places, pylon, routes, store
 from jarvis_google import tools as gtools
 from jarvis_google.accounts import linked_accounts
 
+from . import pylon_ai
 from .audio import MicPipeline, WakeWord
 from .briefing import briefing
 from .config import settings
@@ -170,6 +171,46 @@ async def ws_endpoint(ws: WebSocket):
                 mic.suspended = bool(data.get("playing"))  # avoid self-triggering the wake word
             elif t == "ping":
                 await send({"type": "pong"})
+            elif t == "rpc":
+                async def run_rpc(d=data):
+                    op, args, req = str(d.get("op", "")), dict(d.get("args") or {}), d.get("req")
+                    fn = {"directions_mode": routes.directions_mode}.get(op)
+                    try:
+                        r = {"ok": True, "result": await asyncio.to_thread(fn, **args)} if fn else {"ok": False, "error": "operation not allowed"}
+                    except Exception as e:
+                        r = {"ok": False, "error": f"{e}"[:300]}
+                    await send({"type": "rpc_result", "op": op, "req": req, **r})
+                asyncio.create_task(run_rpc())
+            elif t == "place_open":
+                async def run_place(d=data):
+                    try:
+                        await asyncio.to_thread(places.place_open, str(d.get("place_id", "")))
+                        await session._flush_feed("direct")
+                    except Exception as e:
+                        await send({"type": "toast", "text": f"Couldn't load that place: {e}"[:200], "error": True})
+                asyncio.create_task(run_place())
+            elif t == "pylon":
+                async def run_pylon(d=data):
+                    op, args, req = str(d.get("op", "")), dict(d.get("args") or {}), d.get("req")
+                    try:
+                        if op == "pylon_options":
+                            r = {"ok": True, "result": await asyncio.to_thread(pylon.options)}
+                        elif op == "pylon_draft":
+                            r = {"ok": True, "result": await pylon_ai.draft(str(args.get("issue_id", "")),
+                                                                            str(args.get("kind", "")), str(args.get("steer", "")))}
+                        elif op in pylon.CLICK_READ | pylon.CLICK_WRITE:
+                            r = {"ok": True, "result": await asyncio.to_thread(getattr(pylon, op), **args)}
+                        else:
+                            r = {"ok": False, "error": "operation not allowed"}
+                    except Exception as e:
+                        log.exception("pylon op %s failed", op)
+                        r = {"ok": False, "error": f"{e}"[:300]}
+                    await send({"type": "pylon_result", "op": op, "req": req, **r})
+                    if r.get("ok") and op in pylon.CLICK_WRITE:
+                        session.notes.append(f"Stephen used a Pylon card: {op} -> {(r.get('result') or {}).get('text', '')}")
+                    if op == "pylon_open" and r.get("ok"):
+                        await session._flush_feed("direct")
+                asyncio.create_task(run_pylon())
             elif t == "briefing_refresh":
                 asyncio.create_task(briefing.refresh("manual"))
             elif t == "briefing_action":

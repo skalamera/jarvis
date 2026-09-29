@@ -13,6 +13,7 @@ from jarvis_google import store
 from jarvis_google import tools as gtools
 
 from . import visuals as V
+from .briefing import briefing
 from .config import settings
 from .hermes_client import HermesClient, HermesError
 from .persona import build_instructions
@@ -115,7 +116,9 @@ class Session:
     # ------------------------------------------------------------------ HUD clicks (no model round-trip)
     _DIRECT_READ = {"gmail_read", "gmail_read_thread", "drive_read_text", "gmail_search", "calendar_list"}
     _DIRECT_PROPOSE = {"gmail_send_draft", "gmail_trash", "calendar_delete", "drive_trash"}
-    _DIRECT_EXEC = {"gmail_delete_draft", "gmail_modify"}  # human click on reversible / own-draft ops
+    # human click on reversible / own-draft ops. gmail_trash_now: Stephen clicked Delete then "Confirm delete?"
+    # on that specific visible email, so the double click IS the confirmation (Trash is recoverable + undo).
+    _DIRECT_EXEC = {"gmail_delete_draft", "gmail_modify", "gmail_trash_now", "gmail_restore"}
 
     async def _direct(self, msg: dict) -> None:
         op, args = msg.get("op", ""), dict(msg.get("args") or {})
@@ -131,6 +134,8 @@ class Session:
                          else None, "args": args})
         if op in self._DIRECT_EXEC:
             self.notes.append(f"Stephen used the HUD to run {op} with {args}.")
+            if op == "gmail_trash_now":
+                await briefing.forget_messages(args.get("message_ids") or [])
         await self._flush_feed("direct")
 
     def _busy(self) -> bool:
@@ -300,6 +305,8 @@ class Session:
         await self.send({"type": "action_result", "action_id": action_id, "status": status, "result": out})
         if out.get("ok"):
             self.notes.append(f"Stephen CONFIRMED and it was executed: {action['summary']} -> {out.get('result')}")
+            if action["kind"] in ("gmail_trash", "gmail_delete_permanently"):
+                await briefing.forget_messages(action["params"].get("message_ids") or [])
             await self.say_line(_ACTION_DONE.get(action["kind"], "Done."))
         else:
             self.notes.append(f"Execution FAILED for: {action['summary']} -> {out.get('error')}")
