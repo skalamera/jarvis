@@ -45,6 +45,11 @@ CREATE TABLE IF NOT EXISTS feed (
   args TEXT NOT NULL,
   result TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS own_drafts (   -- drafts JARVIS created; the model may only edit these
+  draft_id TEXT PRIMARY KEY,
+  account TEXT NOT NULL,
+  created REAL NOT NULL
+);
 """
 
 
@@ -88,6 +93,22 @@ def feed_since(seq: int) -> list[dict]:
          "args": json.loads(r["args"]), "result": json.loads(r["result"])}
         for r in rows
     ]
+
+
+def remember_own_draft(account: str, draft_id: str) -> None:
+    with db() as c:
+        c.execute("INSERT OR REPLACE INTO own_drafts(draft_id, account, created) VALUES (?,?,?)",
+                  (draft_id, account, time.time()))
+
+
+def is_own_draft(account: str, draft_id: str) -> bool:
+    with db() as c:
+        return c.execute("SELECT 1 FROM own_drafts WHERE draft_id=? AND account=?",
+                         (draft_id, account)).fetchone() is not None
+
+
+def audit(entry: dict) -> None:
+    _audit(entry)
 
 
 def feed_head() -> int:

@@ -177,6 +177,14 @@ class CoreLink {
       case "card": {
         const c = this.card(m.card, m.turn_id);
         s.addCard(c);
+        if (c.kind === "draft" && c.turnId) {
+          // The draft is the answer: fold away the lookups this same turn made to write it
+          // (inbox searches, the thread it read, the drafts list) so only the draft(s) remain.
+          const scaffolding = (x: Card) =>
+            x.turnId === c.turnId && (x.kind === "email_list" || x.kind === "thread" || x.kind === "email" ||
+              (x.kind === "visual.list" && x.title === "Drafts"));
+          for (const x of useStore.getState().cards.filter(scaffolding)) s.removeCard(x.id);
+        }
         if (c.kind === "confirm") this.speaker?.chime("alert");
         break;
       }
@@ -225,7 +233,7 @@ class CoreLink {
         s.set({ messages: [], cards: [], tools: [], sessionId: m.session_id, focusCardId: null });
         break;
       case "briefing":
-        s.set({ briefing: { data: m.data ?? null, refreshing: !!m.refreshing, error: m.error || "" } });
+        s.set({ briefing: { data: m.data ?? null, refreshing: !!m.refreshing, error: m.error || "", slack: m.slack ?? null, slackError: m.slack_error || "" } });
         break;
       case "toast":
         useStore.getState().toast({ text: m.text, error: !!m.error });
@@ -322,6 +330,11 @@ class CoreLink {
   /** Click on a place row: Core fetches the full Google card and pushes it through the feed. */
   openPlace(placeId: string): void {
     this.send({ type: "place_open", place_id: placeId });
+  }
+
+  /** Click on a ticker anywhere in a market card: Core builds the full stock / crypto card and pushes it. */
+  openMarket(symbol: string, kind: "stock" | "crypto" = "stock"): void {
+    this.send({ type: "market_open", symbol, kind });
   }
 
   briefingAction(itemId: string, action: string, extra: Record<string, unknown> = {}): void {

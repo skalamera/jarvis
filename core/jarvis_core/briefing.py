@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from jarvis_google import slack as gslack
 from jarvis_google import tools as gtools
 from jarvis_google.accounts import account_email, linked_accounts, service
 
@@ -32,6 +33,7 @@ PER_ACCOUNT = 35
 BODY_CHARS = 900
 STATE_FILE = settings.state_dir / "briefing.json"
 HANDLED_KEEP = 3000
+SLACK_REFRESH_S = 120  # Slack is cheap (no model call): keep it fresher than the email triage
 
 SCHEMA: dict = {
     "type": "object",
@@ -104,6 +106,9 @@ class Briefing:
         self._task: asyncio.Task | None = None
         self.refreshing = False
         self.error = ""
+        self.slack: dict | None = None
+        self.slack_error = ""
+        self._slack_lock = asyncio.Lock()
         self._load()
 
     # ------------------------------------------------------------ persistence
@@ -111,6 +116,7 @@ class Briefing:
         try:
             d = json.loads(STATE_FILE.read_text())
             self.data, self.handled = d.get("data"), dict(d.get("handled") or {})
+            self.slack = d.get("slack")
         except (FileNotFoundError, ValueError):
             pass
 
@@ -119,7 +125,7 @@ class Briefing:
             self.handled = dict(sorted(self.handled.items(), key=lambda kv: kv[1])[-HANDLED_KEEP:])
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = STATE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"data": self.data, "handled": self.handled}, default=str))
+        tmp.write_text(json.dumps({"data": self.data, "handled": self.handled, "slack": self.slack}, default=str))
         tmp.replace(STATE_FILE)
 
     # ------------------------------------------------------------ pub/sub
@@ -132,7 +138,60 @@ class Briefing:
                 self.listeners.discard(fn)
 
     def snapshot(self) -> dict:
-        return {"type": "briefing", "data": self.data, "refreshing": self.refreshing, "error": self.error}
+        return {"type": "briefing", "data": self.data, "refreshing": self.refreshing, "error": self.error,
+                "slack": self.slack_view(), "slack_error": self.slack_error}
+
+    # ------------------------------------------------------------ Slack (read-only, no model call)
+    @staticmethod
+    def _slack_key(kind: str, obj: dict) -> str:
+        # a conversation comes back when someone writes again (new latest_ts)
+        return f"slack:{obj['id']}:{obj['latest_ts']}" if kind == "conv" else f"slack:{obj['id']}"
+
+    def slack_view(self) -> dict | None:
+        s = self.slack
+        if not s or not s.get("available"):
+            return s
+        return {**s,
+                "conversations": [c for c in s.get("conversations", []) if self._slack_key("conv", c) not in self.handled],
+                "mentions": [m for m in s.get("mentions", []) if self._slack_key("m", m) not in self.handled],
+                "channels": [p for p in s.get("channels", []) if self._slack_key("p", p) not in self.handled]}
+
+    async def refresh_slack(self, publish: bool = True) -> None:
+        if self._slack_lock.locked() or not gslack.available():
+            return
+        async with self._slack_lock:
+            try:
+                self.slack = await asyncio.to_thread(gslack.gather)
+                self.slack_error = ""
+                self._save()
+            except Exception as e:
+                self.slack_error = f"{type(e).__name__}: {e}"[:200]
+                log.warning("slack refresh failed: %s", e)
+        if publish:
+            await self.publish()
+
+    def _slack_find(self, key: str) -> dict | None:
+        for kind, sec in (("conv", "conversations"), ("m", "mentions"), ("p", "channels")):
+            for o in (self.slack or {}).get(sec, []):
+                if self._slack_key(kind, o) == key:
+                    return o
+        return None
+
+    async def _slack_act(self, key: str, action: str) -> dict:
+        if action == "undo":
+            if self.handled.pop(key, None) is None:
+                return {"ok": False, "error": "Nothing to undo."}
+            self._save()
+            await self.publish()
+            return {"ok": True, "text": "Restored.", "item_id": key}
+        if action != "dismiss":
+            return {"ok": False, "error": "Slack items can only be dismissed here (Slack stays untouched)."}
+        if not self._slack_find(key):
+            return {"ok": False, "error": "That Slack item is no longer in the briefing."}
+        self.handled[key] = time.time()
+        self._save()
+        await self.publish()
+        return {"ok": True, "text": "Dismissed. Slack untouched.", "item_id": key, "undoable": True}
 
     # ------------------------------------------------------------ gather
     def _gather(self) -> list[dict]:
@@ -235,6 +294,7 @@ class Briefing:
     async def refresh(self, reason: str = "manual") -> None:
         if self._lock.locked():
             return
+        asyncio.create_task(self.refresh_slack())  # in parallel with the email triage
         async with self._lock:
             self.refreshing, self.error = True, ""
             await self.publish()
@@ -272,6 +332,8 @@ class Briefing:
             while True:
                 try:
                     await self.ensure()
+                    if not self.slack or time.time() - (self.slack.get("generated_at") or 0) > SLACK_REFRESH_S:
+                        await self.refresh_slack()
                 except Exception:
                     log.exception("briefing loop")
                 await asyncio.sleep(60)
@@ -312,6 +374,8 @@ class Briefing:
 
     # ------------------------------------------------------------ actions (human clicks only)
     async def act(self, item_id: str, action: str, body: str = "", reply_all: bool = False) -> dict:
+        if item_id.startswith("slack:"):
+            return await self._slack_act(item_id, action)
         if action == "undo":
             return await self._undo(item_id)
         found = self._find(item_id)

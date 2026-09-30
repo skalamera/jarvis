@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
-from jarvis_google import places, pylon, routes, store
+from jarvis_google import markets, places, pylon, routes, store
 from jarvis_google import tools as gtools
 from jarvis_google.accounts import linked_accounts
 
@@ -174,13 +174,24 @@ async def ws_endpoint(ws: WebSocket):
             elif t == "rpc":
                 async def run_rpc(d=data):
                     op, args, req = str(d.get("op", "")), dict(d.get("args") or {}), d.get("req")
-                    fn = {"directions_mode": routes.directions_mode}.get(op)
+                    fn = {"directions_mode": routes.directions_mode, "market_chart": markets.market_chart,
+                          "crypto_chart": markets.crypto_chart}.get(op)
                     try:
                         r = {"ok": True, "result": await asyncio.to_thread(fn, **args)} if fn else {"ok": False, "error": "operation not allowed"}
                     except Exception as e:
                         r = {"ok": False, "error": f"{e}"[:300]}
                     await send({"type": "rpc_result", "op": op, "req": req, **r})
                 asyncio.create_task(run_rpc())
+            elif t == "market_open":
+                async def run_market(d=data):
+                    try:
+                        sym, kind = str(d.get("symbol", ""))[:40], d.get("kind")
+                        fn = markets.crypto_open if kind == "crypto" else markets.stock_open
+                        await asyncio.to_thread(fn, sym)
+                        await session._flush_feed("direct")
+                    except Exception as e:
+                        await send({"type": "toast", "text": f"Couldn't load {d.get('symbol', 'that')}: {e}"[:200], "error": True})
+                asyncio.create_task(run_market())
             elif t == "place_open":
                 async def run_place(d=data):
                     try:

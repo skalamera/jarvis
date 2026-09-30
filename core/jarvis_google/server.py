@@ -17,7 +17,9 @@ except ImportError:  # mcp 1.x
 
 from . import places as PL
 from . import routes as RT
+from . import markets as MK
 from . import pylon as P
+from . import store
 from . import tools as T
 from .accounts import AccountError
 
@@ -85,8 +87,10 @@ def gmail_labels(account: str) -> str:
 @mcp.tool()
 def gmail_create_draft(account: str, to: str, subject: str, body: str, cc: str = "", bcc: str = "",
                        reply_to_message_id: str = "") -> str:
-    """Create a Gmail draft (does NOT send). Set reply_to_message_id to draft a threaded reply
-    (subject may be left empty for replies). Shown to the user as an editable draft card."""
+    """Create a NEW Gmail draft (does NOT send). This is the tool for "draft / write / respond / reply to X".
+    For a reply, set reply_to_message_id to the id of the LAST message in the thread (from gmail_search or
+    gmail_read_thread) so it threads; subject may be empty. Always create a new draft; never repurpose an
+    existing one. Shown to the user as an editable draft card."""
     return _safe(T.gmail_create_draft, account=account, to=to, subject=subject, body=body, cc=cc, bcc=bcc,
                  reply_to_message_id=reply_to_message_id)
 
@@ -94,14 +98,18 @@ def gmail_create_draft(account: str, to: str, subject: str, body: str, cc: str =
 @mcp.tool()
 def gmail_update_draft(account: str, draft_id: str, to: str, subject: str, body: str, cc: str = "",
                        bcc: str = "") -> str:
-    """Replace the contents of an existing draft."""
+    """Revise a draft YOU created earlier in this conversation (its draft_id came back from gmail_create_draft).
+    Refuses drafts Stephen wrote himself: those are his work, so create a new draft instead."""
+    if not T.store.is_own_draft(T.resolve_account(account), draft_id):
+        return json.dumps({"error": "refused: that draft was not created by JARVIS, so it may be Stephen's own "
+                                    "writing. Do not overwrite it. Use gmail_create_draft to make a new draft."})
     return _safe(T.gmail_update_draft, account=account, draft_id=draft_id, to=to, subject=subject, body=body,
                  cc=cc, bcc=bcc)
 
 
 @mcp.tool()
 def gmail_list_drafts(account: str, max_results: int = 10) -> str:
-    """List existing drafts."""
+    """List existing drafts (only when Stephen asks about his drafts; not needed to write a new one)."""
     return _safe(T.gmail_list_drafts, account=account, max_results=max_results)
 
 
@@ -261,9 +269,73 @@ def pylon_ticket(number: str) -> str:
     return _safe(P.pylon_ticket, number=number)
 
 
+def _brief(tool: str, fn, **kw) -> str:
+    try:
+        return json.dumps(MK.brief(tool, fn(**kw)), default=str)
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
+# ------------------------------------------------------------------ Slack (read-only)
+@mcp.tool()
+def slack_updates() -> str:
+    """Stephen's Slack (Hadrius workspace): unread DMs and group DMs, @mentions of him, and important company posts
+    (@channel/@here broadcasts, posts with lots of reactions/replies) from the last few days. Renders a Slack card.
+    Use for "any Slack messages?", "what did I miss", "catch me up", "any updates"."""
+    from . import slack as SL
+    try:
+        d = SL.gather()
+        store.record_result("slack_updates", None, {}, d)
+        return json.dumps(SL.summary_for_model(d), default=str)
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
+@mcp.tool()
+def slack_search(query: str, count: int = 15) -> str:
+    """Search Slack messages. Slack search syntax works: from:@ben, in:#customers, after:2026-09-01, "exact phrase".
+    Renders the matching messages as a Slack card."""
+    from . import slack as SL
+    try:
+        d = SL.search(query, count)
+        if not d.get("error"):
+            store.record_result("slack_search", None, {"query": query}, d)
+        return json.dumps({"query": query, "total": d.get("total"), "error": d.get("error"),
+                           "results": [f"{r['channel']} · {r['user']}: {r['text'][:220]}" for r in d.get("results", [])[:12]]})
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
+@mcp.tool()
+def stock_quote(symbols: str, range: str = "") -> str:
+    """Stocks / ETFs / indices / futures (live Yahoo Finance data). `symbols` = one ticker or company name
+    ("NVDA", "Apple", "the S&P", "gold") for a full card: price, change, after-hours, interactive chart, key stats,
+    analyst ratings + price targets, earnings (beats/misses, next date), quarterly revenue, company profile, news.
+    2-6 comma-separated symbols ("AAPL, MSFT, GOOGL") = a performance comparison card. `range` optional:
+    1D 5D 1M 6M YTD 1Y 5Y MAX. The HUD renders the visuals automatically."""
+    return _brief("stock_quote", MK.stock_quote, symbols=symbols, range=range)
+
+
+@mcp.tool()
+def market_overview(focus: str = "") -> str:
+    """How the market is doing today: S&P 500 / Nasdaq / Dow / Russell / VIX / 10Y / gold / oil / bitcoin with
+    intraday sparklines, sector heatmap, top gainers / losers / most active, and top crypto. Renders a market card."""
+    return _brief("market_overview", MK.market_overview, focus=focus)
+
+
+@mcp.tool()
+def crypto_quote(coin: str = "", range: str = "") -> str:
+    """Crypto (live CoinGecko data). `coin` = name or symbol ("bitcoin", "ETH", "solana") for a full card: price,
+    1h/24h/7d/30d/1y change, chart, market cap, volume, supply, all-time high. Empty coin = top coins overview.
+    `range` optional: 1D 7D 1M 1Y MAX. The HUD renders the visuals automatically."""
+    return _brief("crypto_quote", MK.crypto_quote, coin=coin, range=range)
+
+
 @mcp.tool()
 def contacts_search(account: str, query: str, max_results: int = 10) -> str:
-    """Find a person's email/phone by name (contacts, company directory for work, then mail history)."""
+    """Find a person's email/phone/title by name: Google contacts, then (work) the Hadrius company directory
+    from Slack with fuzzy matching for misheard names, then mail history. If nothing matches, the result has
+    no_match_closest_names: weak guesses to ASK Stephen about, never to email without his confirmation."""
     return _safe(T.contacts_search, account=account, query=query, max_results=max_results)
 
 

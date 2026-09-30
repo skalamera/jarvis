@@ -71,7 +71,26 @@ export interface BriefData {
   generated_at: number; scanned: number; took_s: number;
 }
 
-export interface BriefState { data: BriefData | null; refreshing: boolean; error: string }
+export interface SlackLink { url: string; label: string }
+export interface SlackMsg {
+  ts: string; user: string; avatar: string; bot: boolean; text: string; links: SlackLink[]; permalink: string;
+  unread?: boolean;
+}
+export interface SlackConv {
+  id: string; kind: "dm" | "group" | "channel"; title: string; avatar: string; unread: number; bot: boolean;
+  latest_ts: string; messages: SlackMsg[]; url: string; web_url: string;
+}
+export interface SlackPost extends SlackMsg {
+  id: string; channel: string; channel_id: string; url: string;
+  broadcast?: boolean; reactions?: number; replies?: number;
+  top_reactions?: { emoji: string; name: string; count: number }[];
+}
+export interface SlackData {
+  available: boolean; team?: string; conversations: SlackConv[]; mentions: SlackPost[]; channels: SlackPost[];
+  generated_at?: number; took_s?: number;
+}
+
+export interface BriefState { data: BriefData | null; refreshing: boolean; error: string; slack?: SlackData | null; slackError?: string }
 
 export interface Toast { id: string; text: string; undoItem?: string; onUndo?: () => void; error?: boolean }
 

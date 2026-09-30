@@ -106,6 +106,20 @@ def cards_from_feed(item: dict) -> list[dict]:
         return [card("pylon_list", f"Pylon · {r.get('query', 'tickets')}", r)]
     if tool == "pylon_ticket":
         return [card("pylon_ticket", f"#{r.get('number')} {r.get('title', '')}", r)]
+    if tool == "slack_updates":
+        return [card("slack", "Slack · Hadrius", r)]
+    if tool == "slack_search":
+        return [card("slack", f"Slack · “{r.get('query', '')}”", r)]
+    if tool == "stock_quote":
+        if r.get("series"):
+            return [card("stock_compare", " vs ".join(s["symbol"] for s in r["series"]), r)]
+        return [card("stock", f"{r.get('name', '')} · {r.get('symbol', '')}", r)]
+    if tool == "market_overview":
+        return [card("market", "Crypto overview" if r.get("focus") == "crypto" else "Market overview", r)]
+    if tool == "crypto_quote":
+        if r.get("indices") is not None:
+            return [card("market", "Crypto overview", r)]
+        return [card("crypto", f"{r.get('name', '')} · {r.get('symbol', '')}", r)]
     if tool == "weather":
         loc = r.get("location") or {}
         place = ", ".join(x for x in (loc.get("name"), loc.get("region") if loc.get("country") == "US"

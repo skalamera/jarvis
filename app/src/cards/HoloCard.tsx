@@ -8,6 +8,8 @@ import { WeatherCard } from "./WeatherCard";
 import { PylonList, PylonTicket } from "./PylonCards";
 import { PlaceCard, PlacesList } from "./PlaceCards";
 import { DirectionsCard } from "./DirectionsCard";
+import { CryptoCard, MarketCard, StockCard, StockCompareCard } from "./MarketCards";
+import { SlackCard } from "./SlackCards";
 
 const BODY: Record<string, (p: { card: Card }) => React.ReactElement> = {
   email_list: EmailList,
@@ -33,12 +35,17 @@ const BODY: Record<string, (p: { card: Card }) => React.ReactElement> = {
   places: PlacesList,
   place: PlaceCard,
   directions: DirectionsCard,
+  stock: StockCard,
+  stock_compare: StockCompareCard,
+  market: MarketCard,
+  slack: SlackCard,
+  crypto: CryptoCard,
 };
 
 const KIND_LABEL: Record<string, string> = {
   email_list: "MAIL", email: "MESSAGE", thread: "THREAD", draft: "DRAFT", confirm: "AUTHORIZE", calendar: "CALENDAR",
   files: "DRIVE", document: "DOCUMENT", notice: "STATUS", "visual.chart": "ANALYSIS", "visual.stats": "TELEMETRY",
-  "visual.table": "DATA", "visual.list": "INDEX", "visual.image": "IMAGE", "visual.link": "LINK", "visual.markdown": "BRIEF", "visual.map": "NAVIGATION", weather: "WEATHER", pylon_list: "PYLON", pylon_ticket: "TICKET", places: "PLACES", place: "PLACE", directions: "ROUTE",
+  "visual.table": "DATA", "visual.list": "INDEX", "visual.image": "IMAGE", "visual.link": "LINK", "visual.markdown": "BRIEF", "visual.map": "NAVIGATION", weather: "WEATHER", pylon_list: "PYLON", pylon_ticket: "TICKET", places: "PLACES", place: "PLACE", directions: "ROUTE", stock: "MARKETS", stock_compare: "COMPARE", market: "MARKETS", crypto: "CRYPTO", slack: "SLACK",
 };
 
 export function HoloCard({ card, index }: { card: Card; index: number }) {

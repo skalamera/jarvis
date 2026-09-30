@@ -4,6 +4,7 @@ import { useStore } from "../state/store";
 import { core } from "../ws/core";
 import { fmtDate } from "../cards/format";
 import type { BriefItem, BriefMessage } from "../types";
+import { SlackBriefing } from "../cards/SlackCards";
 
 const KIND_ICON: Record<string, string> = { reply: "↩", pay: "$", review: "◉", schedule: "◷", deadline: "⚑", task: "▸" };
 
@@ -172,6 +173,8 @@ export function Briefing() {
         </Section>
       )}
 
+      <SlackBriefing />
+
       {prio.length > 0 && (
         <Section label="PRIORITY" count={prio.length}>
           <AnimatePresence initial={false}>{prio.map((p) => <Row key={p.id} item={p} variant="priority" />)}</AnimatePresence>
@@ -192,7 +195,7 @@ export function Briefing() {
       {d && !todos.length && !prio.length && !topics.length && !b.refreshing && (
         <div className="cards-empty">Inbox zero on everything that matters, sir.</div>
       )}
-      {d && <div className="brief-foot">Scanned {d.scanned} recent emails across both inboxes · AI triage can make mistakes</div>}
+      {d && <div className="brief-foot">Scanned {d.scanned} recent emails across both inboxes{b.slack?.available ? " + Slack" : ""} · AI triage can make mistakes</div>}
     </div>
   );
 }

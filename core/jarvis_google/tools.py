@@ -138,7 +138,7 @@ def accounts_list() -> list[dict]:
 
 # ====================================================================== Gmail: read
 
-def gmail_search(account: str, query: str = "in:inbox", max_results: int = 10) -> dict:
+def gmail_search(account: str, query: str = "in:inbox", max_results: int = 10, show: bool = True) -> dict:
     account = resolve_account(account)
     gm = service("gmail", account)
     max_results = max(1, min(int(max_results), 50))
@@ -147,6 +147,8 @@ def gmail_search(account: str, query: str = "in:inbox", max_results: int = 10) -
     msgs = [_message_summary(m) for m in _batch_get(gm, ids)]
     result = {"account": account, "email": account_email(account), "query": query,
               "result_size_estimate": resp.get("resultSizeEstimate", len(msgs)), "messages": msgs}
+    if not show:  # internal lookup (e.g. contacts fallback): no HUD card
+        return result
     return _feed("gmail_search", account, {"query": query, "max_results": max_results}, result)
 
 
@@ -294,6 +296,7 @@ def gmail_create_draft(account: str, to: str, subject: str, body: str, cc: str =
     if thread_id:
         draft_body["message"]["threadId"] = thread_id
     d = gm.users().drafts().create(userId="me", body=draft_body).execute()
+    store.remember_own_draft(account, d["id"])
     result = {"status": "draft_created", "account": account, "draft_id": d["id"],
               "message_id": d["message"]["id"], "threadId": d["message"].get("threadId"),
               "from": account_email(account), "to": to, "cc": cc, "bcc": bcc, "subject": subject, "body": body,
@@ -307,6 +310,12 @@ def gmail_update_draft(account: str, draft_id: str, to: str, subject: str, body:
     gm = service("gmail", account)
     existing = gm.users().drafts().get(userId="me", id=draft_id, format="metadata").execute()
     h = _hdrs(existing["message"].get("payload", {}))
+    try:  # keep the previous version recoverable (local audit log only)
+        prev = gm.users().drafts().get(userId="me", id=draft_id, format="raw").execute()
+        store.audit({"event": "draft_overwritten", "account": account, "draft_id": draft_id,
+                     "prev_raw": prev["message"].get("raw", "")})
+    except HttpError:
+        pass
     msg = _build_mime(account, to, subject, body, cc, bcc,
                       in_reply_to=h.get("in-reply-to", ""), references=h.get("references", ""))
     msg_body: dict = {"raw": _raw(msg)}
@@ -663,13 +672,6 @@ def contacts_search(account: str, query: str, max_results: int = 10) -> dict:
                    .execute().get("results", [])]
     except HttpError:
         pass
-    if account == "work":
-        try:
-            people += ppl.searchDirectoryPeople(query=query, readMask=mask, pageSize=max_results,
-                                                sources=["DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE"]
-                                                ).execute().get("people", [])
-        except HttpError:
-            pass
     out: dict[str, dict] = {}
     for p in people:
         emails = [e["value"] for e in p.get("emailAddresses", [])]
@@ -677,11 +679,29 @@ def contacts_search(account: str, query: str, max_results: int = 10) -> dict:
         out.setdefault(key, {"name": (p.get("names") or [{}])[0].get("displayName", ""), "emails": emails,
                              "phones": [x["value"] for x in p.get("phoneNumbers", [])],
                              "org": (p.get("organizations") or [{}])[0].get("name", ""), "source": "contacts"})
+    did_you_mean: list[dict] = []
+    if account == "work":  # company directory = Slack workspace (Google directory API isn't granted)
+        from . import slack_dir
+        try:
+            for s in slack_dir.search(query, limit=max_results):
+                if s["email"]:
+                    out.setdefault(s["email"].lower(), {
+                        "name": s["name"], "emails": [s["email"]], "phones": [s["phone"]] if s["phone"] else [],
+                        "org": "Hadrius" + (" (guest)" if s["guest"] else ""), "title": s["title"],
+                        "source": "slack", "match": s["match"]})
+            if not out:
+                did_you_mean = [{"name": s["name"], "email": s["email"], "title": s["title"], "match": s["match"]}
+                                for s in slack_dir.nearest(query, 3)]
+        except Exception:  # Slack down / token missing: mail history below still works
+            pass
     if not out:  # fall back to correspondents found in mail
-        for m in gmail_search(account, f"from:({query})", 10)["messages"]:
+        for m in gmail_search(account, f"from:({query})", 10, show=False)["messages"]:
             out.setdefault(m["from_email"].lower(), {"name": m["from_name"], "emails": [m["from_email"]],
                                                      "phones": [], "org": "", "source": "gmail"})
-    return {"account": account, "query": query, "contacts": list(out.values())[:max_results]}
+    res = {"account": account, "query": query, "contacts": list(out.values())[:max_results]}
+    if not res["contacts"] and did_you_mean:
+        res["no_match_closest_names"] = did_you_mean  # weak matches only: ASK before using any of these
+    return res
 
 
 # ====================================================================== weather (no Google; lives here for the feed)

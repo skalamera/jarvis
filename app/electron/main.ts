@@ -7,7 +7,17 @@ import http from "node:http";
 
 const DEV_URL = process.env.JARVIS_DEV_URL; // e.g. http://localhost:5199 (npm run dev)
 const CORE_PORT = Number(process.env.JARVIS_PORT || 8765);
-const PROJECT_ROOT = process.env.JARVIS_ROOT || path.resolve(__dirname, "..", "..");
+// Packaged J.A.R.V.I.S..app: the repo path is baked into package.json (jarvisRoot) by `npm run dist`,
+// because __dirname then points inside the .app bundle. Dev runs resolve it relative to app/.
+function bakedRoot(): string {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(app.getAppPath(), "package.json"), "utf8")).jarvisRoot || "";
+  } catch {
+    return "";
+  }
+}
+const PROJECT_ROOT =
+  process.env.JARVIS_ROOT || (app.isPackaged && bakedRoot()) || path.resolve(__dirname, "..", "..");
 const CORE_DIR = path.join(PROJECT_ROOT, "core");
 const CORE_PY = path.join(CORE_DIR, ".venv", "bin", "python");
 const LOG_DIR = path.join(app.getPath("home"), "Library", "Logs", "Jarvis");
@@ -173,7 +183,7 @@ app.whenReady().then(async () => {
     token: externalCore ? process.env.JARVIS_TOKEN || "" : TOKEN,
   }));
   ipcMain.on("jarvis:open", (_e, url: string) => {
-    if (/^https?:\/\//.test(url) || /^tel:\+?[\d()\-. ]{3,20}$/.test(url)) shell.openExternal(url);
+    if (/^https?:\/\//.test(url) || /^tel:\+?[\d()\-. ]{3,20}$/.test(url) || /^slack:\/\/channel\?[\w=&%.-]+$/.test(url)) shell.openExternal(url);
   });
   if (process.platform === "darwin" && app.dock) {
     const dockImg = nativeImage.createFromPath(path.join(ASSETS, "icon.png"));

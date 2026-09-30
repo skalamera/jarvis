@@ -322,7 +322,8 @@ function RightPanel() {
   const tab = useStore((s) => s.rightTab);
   const b = useStore((s) => s.briefing);
   const setTab = (t: "briefing" | "displays") => useStore.getState().set({ rightTab: t });
-  const n = b.data ? b.data.todos.length + b.data.priority.length : 0;
+  const sl = b.slack?.available ? b.slack.conversations.filter((c) => !c.bot).length + b.slack.mentions.length : 0;
+  const n = (b.data ? b.data.todos.length + b.data.priority.length : 0) + sl;
   const unseen = useStore((s) => s.displaysUnseen);
   const pending = cards.filter((c) => c.kind === "confirm" && (c.status ?? "pending") === "pending");
   return (
