@@ -5,6 +5,8 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
+import os
+import re
 import httpx
 
 UA = {"User-Agent": "JARVIS/0.1 (personal assistant)"}
@@ -45,8 +47,29 @@ def _wmo(code: Any) -> tuple[str, str]:
         return ("Unknown", "cloudy")
 
 
+# Where Stephen is. IP geolocation puts this Mac's ISP exit in the next town over (Pelham), so a fixed home location
+# wins; set JARVIS_LOCATION="City, ST" (or "lat,lon") to change it, or JARVIS_LOCATION="ip" to use IP lookup.
+HOME = os.environ.get("JARVIS_LOCATION", "New Rochelle, NY").strip()
+_home_cache: dict | None = None
+
+
 def _here(http: httpx.Client) -> dict:
-    """Approximate location of this Mac from its public IP (two providers for resilience)."""
+    """Stephen's location: the configured home (geocoded once), else this Mac's public IP (two providers)."""
+    global _home_cache
+    if HOME and HOME.lower() != "ip":
+        if _home_cache is None:
+            try:
+                m = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*", HOME)
+                if m:
+                    _home_cache = {"name": HOME, "region": "", "country": "US", "lat": float(m[1]), "lon": float(m[2]),
+                                   "source": "home"}
+                else:
+                    g = _geocode(http, HOME)
+                    _home_cache = {**g, "source": "home"}
+            except Exception:
+                _home_cache = {}
+        if _home_cache:
+            return dict(_home_cache)
     try:
         j = http.get("http://ip-api.com/json/", timeout=6).json()
         if j.get("status") == "success":

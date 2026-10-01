@@ -19,6 +19,7 @@ import numpy as np
 log = logging.getLogger("jarvis.audio")
 RATE = 16000
 FRAME = 1280  # 80 ms, what openWakeWord expects
+PHRASE_MIN_S, PHRASE_MAX_S = 0.5, 3.2  # sleep-word phrases ("Morning, Jarvis") are short
 
 
 class WakeWord:
@@ -91,6 +92,9 @@ class MicPipeline:
         self._cooldown_until = 0.0
         self._via = "wake"
         self._max_initial_silence = 6.0
+        # Asleep: the wake word still works, and short phrases are also captured and transcribed so a spoken
+        # "Morning, Jarvis" (which the wake-word model doesn't know) can be recognised.
+        self.sleeping = False
 
     # ------------------------------------------------------------------ control
     async def set_listening(self, enabled: bool) -> None:
@@ -140,6 +144,8 @@ class MicPipeline:
         self._rec_frames = 0
         self.heard_speech = mode == "ptt"
         self.silence_frames = 0
+        self._phrase_wake = False  # asleep: the wake-word model fired inside this phrase
+        self._too_long = False
 
     # ------------------------------------------------------------------ audio
     async def feed(self, pcm: bytes) -> None:
@@ -158,21 +164,46 @@ class MicPipeline:
             self._level_t = now
             await self.on_event({"type": "mic_level", "level": min(1.0, self.vad.rms(frame) / 6000.0)})
 
+        if self.mode == "phrase":  # asleep: a short phrase is being captured for the sleep-word check
+            self.rec.append(frame)
+            self._rec_frames += 1
+            # The wake-word model also fires on the "Jarvis" in "Morning, Jarvis", so a hit here doesn't wake anything
+            # by itself: it only marks the phrase. The words decide once the phrase ends (main.on_utterance).
+            if self.wake.score(frame) >= self.wake.threshold and not self._phrase_wake:
+                self._phrase_wake = True
+                self.wake.reset()
+            self.silence_frames = 0 if speech else self.silence_frames + 1
+            limit = 15.0 if self._phrase_wake else PHRASE_MAX_S + 0.6  # "Hey Jarvis, <a request>" may run long
+            if len(self.rec) * FRAME / RATE > limit:
+                self.rec = self.rec[-2:]  # too long to keep: wait for silence
+                self._too_long = True
+            if self.silence_frames >= 7:  # ~0.56 s pause ends the phrase
+                frames, self.rec = self.rec, []
+                self.mode = "wake" if self.wake_enabled and self.wake.available else "off"
+                self._cooldown_until = now + 1.0
+                secs = (len(frames) - self.silence_frames) * FRAME / RATE  # spoken part only
+                pcm = np.concatenate(frames).tobytes()
+                if self._phrase_wake:  # always wakes; the transcript says whether it's the power-on
+                    asyncio.create_task(self.on_utterance(b"" if self._too_long else pcm, "sleep_wake"))
+                elif not self._too_long and PHRASE_MIN_S <= secs <= PHRASE_MAX_S:
+                    asyncio.create_task(self.on_utterance(pcm, "sleep_phrase"))
+                self._phrase_wake = self._too_long = False
+            return
         if self.mode == "wake":
             self.pre.append(frame)
             if self.suspended or now < self._cooldown_until:
                 self.wake.score(frame)  # keep model state warm
                 return
             s = self.wake.score(frame)
+            if self.sleeping and (speech or s >= self.wake.threshold):
+                self._begin("phrase")  # includes the pre-roll so the first syllable isn't lost
+                self._rec_frames = len(self.rec)
+                if s >= self.wake.threshold:
+                    self._phrase_wake = True
+                    self.wake.reset()
+                return
             if s >= self.wake.threshold:
-                self.wake.reset()
-                self._cooldown_until = now + 1.5
-                self._via = "wake"
-                self._max_initial_silence = 6.0
-                self._begin("capture")
-                self.rec = []  # drop the wake phrase itself
-                await self.on_event({"type": "wake", "score": round(s, 3)})
-                await self.on_event({"type": "listening", "via": "wake"})
+                await self._wake_fired(s, now)
             return
 
         if self.mode in ("capture", "ptt"):
@@ -192,6 +223,16 @@ class MicPipeline:
                     await self._finish(via)
             elif dur > 60:
                 await self._finish("ptt")
+
+    async def _wake_fired(self, score: float, now: float) -> None:
+        self.wake.reset()
+        self._cooldown_until = now + 1.5
+        self._via = "wake"
+        self._max_initial_silence = 6.0
+        self._begin("capture")
+        self.rec = []  # drop the wake phrase itself
+        await self.on_event({"type": "wake", "score": round(score, 3)})
+        await self.on_event({"type": "listening", "via": "wake"})
 
     async def _finish(self, via: str) -> None:
         frames, heard = self.rec, self.heard_speech

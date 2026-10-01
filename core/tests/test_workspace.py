@@ -181,3 +181,10 @@ def test_click_only_ops_are_not_mcp_tools():
     from jarvis_google import server
     src = inspect.getsource(server)
     assert "AR.export" not in src and "CODE.undo_change" not in src
+
+
+def test_sheet_stats_skip_totals_row():
+    from jarvis_google.artifacts import sheet_stats
+    g = [["Account", "Size"], ["A", "10"], ["B", "30"], ["Total", "40"]]
+    st = sheet_stats(g)
+    assert st[0]["sum"] == 40 and st[0]["count"] == 2 and st[0]["max"] == 30

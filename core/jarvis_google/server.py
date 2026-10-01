@@ -329,6 +329,36 @@ def sports_game(league: str = "", team: str = "", date: str = "", when: str = ""
         return json.dumps({"error": f"{type(e).__name__}: {e}"})
 
 
+# ------------------------------------------------------------------ used cars near Stephen (read-only)
+@mcp.tool()
+def cars_nearby(make: str = "Mercedes-Benz", model: str = "CLS-Class", trim: str = "CLS 550 4MATIC") -> str:
+    """Used cars for sale near Stephen (home area, nearest first): price, mileage, dealer town, distance, photos,
+    links. Defaults to the Mercedes-Benz CLS 550 4MATIC he's watching. Renders a car listings card with a price vs
+    mileage chart. Use for "any CLS 550s for sale", "update on the CLS", "used Mercedes near me"."""
+    from . import cars as CA
+    try:
+        return json.dumps(CA.brief(CA.cars_nearby(make, model, trim)), default=str)
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
+# ------------------------------------------------------------------ Hadrius support model (precomputed blueprint)
+@mcp.tool()
+def support_model(section: str = "", tour: bool = False) -> str:
+    """How Hadrius Support works: the 3-tier AI support model (Pylon triggers, Vercel middleware, Tier 1 Jamie,
+    Tier 2 Hadrian, Tier 3 support team, Account Management, Linear, statuses, guardrails). Instant: a
+    precomputed, source-grounded blueprint (no research needed). Renders the interactive Support Model display
+    (architecture blueprint, workflow diagrams, routing matrix, lifecycle, budgets). section: "" (overview) or one of
+    architecture, layers, tiers, flows, routing, lifecycle, budgets, payloads, guardrails, faq, glossary, or a free-text
+    topic ("draft-reply", "feature request", "loop guard") to pull matching detail. tour=True for broad "explain /
+    walk me through the support model" asks: JARVIS then narrates the whole blueprint tab by tab."""
+    from . import support as SU
+    try:
+        return json.dumps(SU.support_model(section, tour), default=str)
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
 # ------------------------------------------------------------------ Slack (read-only)
 @mcp.tool()
 def slack_updates() -> str:
@@ -393,6 +423,11 @@ def contacts_search(account: str, query: str, max_results: int = 10) -> str:
 
 
 def main() -> None:
+    try:  # videos still rendering when the server last stopped: keep polling them
+        from . import generate as GEN
+        GEN.resume_jobs()
+    except Exception:
+        pass
     mcp.run()
 
 
@@ -451,6 +486,38 @@ def image_edit(artifact_id: str, ops: list[dict], note: str = "") -> str:
     {"op":"invert"}, {"op":"sharpen"}, {"op":"blur","radius":2}, {"op":"annotate","text":"...","x":0.05,"y":0.05,
     "color":"#ff3b30","size":32}. Saves a new version (undoable)."""
     return _safe(AR.image_edit, artifact_id=artifact_id, ops=ops, note=note)
+
+
+@mcp.tool()
+def image_generate(prompt: str, aspect_ratio: str = "", source_artifact_id: str = "", quality: str = "fast",
+                   filename: str = "") -> str:
+    """Generate a picture/photo/illustration from a text prompt with Gemini (Nano Banana) and show it on the HUD.
+    Write a rich prompt (subject, setting, style, lighting, lens/mood). aspect_ratio: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2,
+    2:3, 21:9. To change the CONTENT of an existing image (uploaded or generated): pass its source_artifact_id and say
+    the change ("make it night", "put me in a suit"); that saves a new, undoable version. quality: fast | best.
+    Takes ~10-20 s."""
+    from . import generate as GEN
+    return _safe(GEN.image_generate, prompt=prompt, aspect_ratio=aspect_ratio, source_artifact_id=source_artifact_id,
+                 quality=quality, filename=filename)
+
+
+@mcp.tool()
+def video_generate(prompt: str, aspect_ratio: str = "16:9", duration_s: int = 8, image_artifact_id: str = "",
+                   quality: str = "fast", filename: str = "") -> str:
+    """Generate a short video clip (4, 6 or 8 s, with sound) from a prompt with Google Veo 3.1. Returns immediately:
+    it renders in the background (1-3 min) and the HUD card turns into the playable video when done. Describe shot,
+    subject, action, camera move, style and sound. image_artifact_id animates an existing image. aspect_ratio 16:9 or
+    9:16. quality: lite | fast | best (best is slower)."""
+    from . import generate as GEN
+    return _safe(GEN.video_generate, prompt=prompt, aspect_ratio=aspect_ratio, duration_s=duration_s,
+                 image_artifact_id=image_artifact_id, quality=quality, filename=filename)
+
+
+@mcp.tool()
+def video_status(artifact_id: str = "") -> str:
+    """Status of recent generated videos (running / done / failed)."""
+    from . import generate as GEN
+    return _safe(GEN.video_status, artifact_id=artifact_id)
 
 
 @mcp.tool()

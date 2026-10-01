@@ -7,9 +7,11 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useStore } from "../state/store";
 import { core } from "../ws/core";
 import { ArtifactCard, CodebaseCard, CodeChangesCard, CodeFileCard } from "../cards/WorkspaceCards";
+import { SupportBlueprintCard } from "../cards/SupportCards";
 
 const XL: Record<string, (p: { card: any; expanded?: boolean }) => React.ReactElement> = {
   artifact: ArtifactCard, codebase: CodebaseCard, code_file: CodeFileCard, code_changes: CodeChangesCard,
+  support_blueprint: SupportBlueprintCard,
 };
 
 export function Workbench() {
@@ -31,14 +33,14 @@ export function Workbench() {
             exit={{ opacity: 0, scale: 0.97, filter: "blur(6px)" }} transition={{ type: "spring", stiffness: 240, damping: 26 }} onClick={(e) => e.stopPropagation()}>
             <span className="corner tl" /><span className="corner tr" /><span className="corner bl" /><span className="corner br" />
             <header className="wb-head">
-              <span className="wb-kind">{card.kind === "artifact" ? "WORKBENCH" : card.kind === "codebase" ? "CODEBASE" : card.kind === "code_changes" ? "CHANGES" : "SOURCE"}</span>
+              <span className="wb-kind">{card.kind === "artifact" ? "WORKBENCH" : card.kind === "codebase" ? "CODEBASE" : card.kind === "code_changes" ? "CHANGES" : card.kind === "support_blueprint" ? "BLUEPRINT" : "SOURCE"}</span>
               <span className="wb-title">{card.title}</span>
               <span className={`wb-state st-${hud}`}><i />{hud === "speaking" ? "JARVIS" : hud.toUpperCase()}</span>
               <button className="holo-x" onClick={() => useStore.getState().set({ expandedCardId: null })} title="Close (Esc)">×</button>
             </header>
             <div className="wb-body"><Body card={card} expanded /></div>
             <footer className="wb-foot">
-              <span className="wb-caption">{caption || "Talk to JARVIS about this: “what stands out?”, “fix the totals row”, “refactor this function”…"}</span>
+              <span className="wb-caption">{caption || (card.kind === "support_blueprint" ? "Ask about any part: “what does Hadrian do?”, “how is a feature request routed?”, “what's Draft-Reply Mode?”" : "Talk to JARVIS about this: “what stands out?”, “fix the totals row”, “refactor this function”…")}</span>
               <WbInput />
             </footer>
           </motion.div>

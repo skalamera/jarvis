@@ -18,7 +18,13 @@ from .config import settings
 from .hermes_client import HermesClient, HermesError
 from .persona import build_instructions
 from .quick import quick_answer
+from . import showcase
 from .voice import Voice, b64
+
+def support_available() -> bool:
+    from jarvis_google import support
+    return support.available()
+
 
 log = logging.getLogger("jarvis.session")
 Send = Callable[[dict], Awaitable[None]]
@@ -49,6 +55,9 @@ def classify_confirmation(text: str) -> str | None:
     return None
 
 
+# Tools whose displays may land after the turn ended (rendered in the background).
+BACKGROUND_TOOLS = {"video_generate"}
+
 class Session:
     def __init__(self, send: Send, hermes: HermesClient, voice: Voice):
         self._send, self.hermes, self.voice = send, hermes, voice
@@ -65,8 +74,13 @@ class Session:
         self._closed = False
         self._feed_pos = store.feed_head()
         self._health_task: asyncio.Task | None = None
+        self._idle_feed_task: asyncio.Task | None = None
         self.attachments: list[dict] = []  # files uploaded since the last turn, handed to the next one
         self.focus: dict | None = None      # the file / project currently on screen (the conversation's subject)
+        self._played = asyncio.Event()      # the HUD finished playing everything queued (showcase pacing)
+        self._tour_pending = False          # support_model(tour=True) ran this turn: narrate the tour after the reply
+        self.sleeping = False               # dimmed HUD; "Morning, Jarvis" powers it on (cinematic + daily briefing)
+        self.mic: Any = None                # the MicPipeline (main.py), so sleep can switch it into sleep-word mode
 
     # ------------------------------------------------------------------ io
     async def send(self, msg: dict) -> None:
@@ -76,6 +90,43 @@ class Session:
             await self._send(msg)
         except Exception:  # client went away
             self._closed = True
+
+    # ------------------------------------------------------------------ sleep / power on
+    async def go_to_sleep(self, line: str | None = None) -> None:
+        await self.cancel_turn()
+        if line:
+            self._played.clear()
+            await self.say_line(line)
+            if self.speak:
+                try:  # let the line finish before the lights go down
+                    await asyncio.wait_for(self._played.wait(), timeout=6)
+                except asyncio.TimeoutError:
+                    pass
+        self.sleeping = True
+        if self.mic is not None:
+            self.mic.sleeping = True
+        await self.send({"type": "sleep", "asleep": True})
+        await self.state("sleep")
+
+    async def wake_up(self) -> None:
+        if not self.sleeping:
+            return
+        self.sleeping = False
+        if self.mic is not None:
+            self.mic.sleeping = False
+        await self.send({"type": "sleep", "asleep": False})
+        if self._state == "sleep":
+            await self.state("idle")
+
+    async def power_on(self) -> None:
+        """'Morning, Jarvis': the HUD plays its short power-on sequence while the briefing gathers, then the briefing."""
+        await self.cancel_turn()
+        self.sleeping = False
+        if self.mic is not None:
+            self.mic.sleeping = False
+        await self.send({"type": "power_on", "ms": int(showcase.POWER_ON_S * 1000)})
+        await self.send({"type": "sleep", "asleep": False})
+        await self.start_showcase("demo", intro_delay=showcase.POWER_ON_S)
 
     async def state(self, s: str) -> None:
         if s != self._state:
@@ -92,6 +143,21 @@ class Session:
             await self._show_action(a)
         if self._health_task is None or self._health_task.done():
             self._health_task = asyncio.create_task(self._health_loop(h, v))
+        if self._idle_feed_task is None or self._idle_feed_task.done():
+            self._idle_feed_task = asyncio.create_task(self._idle_feed_loop())
+
+    async def _idle_feed_loop(self) -> None:
+        """Between turns, still show displays that land late (a generated video finishing in the background)."""
+        while not self._closed:
+            await asyncio.sleep(1.5)
+            if self._busy() or self._closed:
+                continue
+            try:
+                await self._flush_feed("background", only=BACKGROUND_TOOLS)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                pass
 
     async def _health_loop(self, last_h: bool, last_v: bool) -> None:
         while not self._closed:
@@ -113,6 +179,8 @@ class Session:
         self._closed = True
         if self._health_task and not self._health_task.done():
             self._health_task.cancel()
+        if self._idle_feed_task and not self._idle_feed_task.done():
+            self._idle_feed_task.cancel()
         await self.cancel_turn()
 
     # ------------------------------------------------------------------ inbound
@@ -135,8 +203,11 @@ class Session:
         elif t == "reset":
             await self.reset()
         elif t == "playback_done":
+            self._played.set()
             if self._state == "speaking" and not self._busy():
                 await self.state("idle")
+        elif t == "showcase":
+            await self.start_showcase(str(msg.get("which") or "demo"))
         elif t == "direct":
             await self._direct(msg)
 
@@ -193,6 +264,26 @@ class Session:
             await self.reset()
             await self.say_line("A clean slate, sir.")
             return
+        if showcase.is_sleep_request(text):
+            # as a task: the goodnight line must finish playing first, and playback_done arrives on this same loop
+            await self.cancel_turn()
+            self.turn_task = asyncio.create_task(
+                self.go_to_sleep("Goodnight, sir." if re.search(r"night", text, re.I) else "Very good, sir."))
+            return
+        if self.sleeping:  # anything typed or said directly (push-to-talk) wakes it the normal way
+            if showcase.is_morning(text):
+                await self.power_on()
+                return
+            await self.wake_up()
+        if showcase.is_morning(text):
+            await self.power_on()
+            return
+        if showcase.is_trigger(text):
+            await self.start_showcase("demo")
+            return
+        if showcase.is_tour_request(text) and support_available():
+            await self.start_showcase("support_tour")
+            return
         quick = quick_answer(text, settings.timezone)
         if quick:  # time/date: answer locally, no model round trip
             await self.cancel_turn()
@@ -201,6 +292,29 @@ class Session:
             return
         await self.cancel_turn()  # barge-in
         self.turn_task = asyncio.create_task(self._turn(self._with_context(text)))
+
+    async def start_showcase(self, which: str, intro_delay: float = 0.0) -> None:
+        """The preset demo, or the narrated support-model tour, run as this session's turn (Esc cancels it)."""
+        await self.cancel_turn()
+        if which == "support_tour":
+            if not support_available():
+                await self.say_line("The support blueprint hasn't been built yet, sir.")
+                return
+            coro = showcase.support_tour(self)
+        else:
+            coro = showcase.run(self, intro_delay=intro_delay)
+
+        async def guarded():
+            try:
+                await coro
+            except asyncio.CancelledError:
+                await self.send({"type": "showcase", "active": False})
+                raise
+            except Exception:
+                log.exception("showcase %s failed", which)
+                await self.send({"type": "showcase", "active": False})
+                await self.say_line("My apologies, sir. The presentation hit a snag.")
+        self.turn_task = asyncio.create_task(guarded())
 
     # ------------------------------------------------------------------ files & projects in the conversation
     def attach(self, items: list[dict]) -> None:
@@ -307,6 +421,9 @@ class Session:
             for s in sentences.feed(clean, final=True):
                 await self._say(turn_id, s)
             await self._end_tts()
+            if self._tour_pending:  # support_model(tour=True): narrate the blueprint once the reply is queued
+                self._tour_pending = False
+                await showcase.support_tour(self, intro=None, show_card=False)
         except HermesError as e:
             await self.send({"type": "assistant_final", "turn_id": turn_id,
                              "text": f"I can't reach my core systems right now. {e}", "error": True})
@@ -327,10 +444,14 @@ class Session:
             await asyncio.sleep(0.3)
             await self._flush_feed(turn_id)
 
-    async def _flush_feed(self, turn_id: str) -> None:
+    async def _flush_feed(self, turn_id: str, only: set[str] | None = None) -> None:
         for item in store.feed_since(self._feed_pos):
             self._feed_pos = item["seq"]
+            if only is not None and item["tool"] not in only:
+                continue  # between turns: other sessions' tool calls aren't his displays
             res = item.get("result") if isinstance(item.get("result"), dict) else {}
+            if item["tool"] == "support_model" and (item.get("args") or {}).get("tour"):
+                self._tour_pending = True
             if item["tool"] in ("code_map", "code_annotate", "code_change") and res.get("root"):
                 self.focus = {"type": "project", "root": res["root"], "name": res.get("name")}
             elif res.get("artifact"):

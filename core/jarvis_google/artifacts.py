@@ -32,6 +32,7 @@ XLSX_EXT = {".xlsx", ".xlsm"}
 CODE_EXT = {".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".rs", ".go", ".java", ".kt", ".swift", ".c", ".h",
             ".cc", ".cpp", ".hpp", ".cs", ".rb", ".php", ".sh", ".zsh", ".bash", ".sql", ".html", ".css", ".scss",
             ".json", ".yaml", ".yml", ".toml", ".ini", ".xml", ".vue", ".svelte", ".lua", ".r", ".dart", ".scala"}
+VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v"}
 TEXT_EXT = {".txt", ".md", ".markdown", ".rst", ".log", ".svg"}
 TEXT_KINDS = {"code", "text", "csv"}
 _ID = re.compile(r"^art_[0-9a-f]{10}$")
@@ -49,6 +50,8 @@ def kind_of(filename: str, head: bytes = b"") -> str:
     ext = Path(filename).suffix.lower()
     if ext in IMAGE_EXT:
         return "image"
+    if ext in VIDEO_EXT:
+        return "video"
     if ext in CSV_EXT:
         return "csv"
     if ext in XLSX_EXT:
@@ -111,16 +114,19 @@ def _new_version(m: dict, data: bytes, source: str, note: str) -> dict:
     return m
 
 
-def save_upload(filename: str, data: bytes, mime: str | None = None) -> dict:
-    if len(data) > MAX_UPLOAD:
+def save_upload(filename: str, data: bytes, mime: str | None = None, aid: str = "", source: str = "upload",
+                note: str = "original") -> dict:
+    """A new workspace file. aid / source / note are for generated files (the id is reserved up front so the progress
+    card and the finished file share a display)."""
+    if len(data) > MAX_UPLOAD and source == "upload":
         raise ValueError(f"file is larger than {MAX_UPLOAD // (1024 * 1024)} MB")
     name = _clean_name(filename)
-    aid = "art_" + uuid.uuid4().hex[:10]
+    aid = aid if _ID.match(aid or "") else "art_" + uuid.uuid4().hex[:10]
     (ART_DIR / aid).mkdir(parents=True, exist_ok=True)
     m = {"id": aid, "filename": name, "ext": Path(name).suffix.lower(), "kind": kind_of(name, data),
          "mime": mime or mimetypes.guess_type(name)[0] or "application/octet-stream",
          "created_at": time.time(), "updated_at": time.time(), "size": len(data), "versions": []}
-    return _new_version(m, data, "upload", "original")
+    return _new_version(m, data, source, note)
 
 
 def list_artifacts(limit: int = 30) -> list[dict]:
@@ -171,6 +177,9 @@ def sheet_stats(grid: list[list[str]]) -> list[dict]:
     if len(grid) < 2:
         return []
     header, body = grid[0], grid[1:]
+    # a trailing "Total" / "Grand total" / "Sum" row is a summary, not data: counting it would double every sum
+    while body and any(re.fullmatch(r"\s*(grand\s+)?(totals?|sum|subtotal)\s*:?\s*", str(c), re.I) for c in body[-1][:3]):
+        body = body[:-1]
     out = []
     for ci, name in enumerate(header):
         vals = [r[ci] for r in body if ci < len(r) and str(r[ci]).strip()]
@@ -268,6 +277,8 @@ def view(m: dict) -> dict:
             from PIL import Image
             with Image.open(p) as im:
                 return {"type": "image", "width": im.width, "height": im.height, "format": im.format, "mode": im.mode}
+        if k == "video":
+            return {"type": "video", "size": m["size"]}
         if k == "csv":
             grid, delim = _csv_grid(m, _decode(p.read_bytes()))
             return {"type": "sheet", "delimiter": delim, "sheets": [{

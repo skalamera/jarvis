@@ -36,6 +36,11 @@ interface Store {
   attachments: { id: string; filename: string; kind: string; size: number }[];
   uploading: number;
   dropActive: boolean;
+  /** The preset showcase / narrated support tour while it runs (progress HUD). */
+  showcase: { active: boolean; step: number; total: number; label: string; mode?: string } | null;
+  /** Sleep mode (dimmed HUD) and the moment the power-on sequence started (ms since epoch, 0 = not playing). */
+  asleep: boolean;
+  powerOnAt: number;
   set: (p: Partial<Store>) => void;
   addMessage: (m: Message) => void;
   upsertJarvis: (turnId: string, text: string, final?: boolean, extra?: Partial<Message>) => void;
@@ -46,7 +51,7 @@ interface Store {
   clearTurn: () => void;
 }
 
-const MAX_CARDS = 14;
+const MAX_CARDS = 18;
 
 export const useStore = create<Store>((set, get) => ({
   briefing: { data: null, refreshing: false, error: "" },
@@ -84,6 +89,9 @@ export const useStore = create<Store>((set, get) => ({
   attachments: [],
   uploading: 0,
   dropActive: false,
+  showcase: null,
+  asleep: false,
+  powerOnAt: 0,
   set: (p) => set(p),
   addMessage: (m) => set((s) => ({ messages: [...s.messages.slice(-80), m], logUnseen: s.logOpen ? 0 : s.logUnseen + 1 })),
   upsertJarvis: (turnId, text, final = false, extra = {}) =>

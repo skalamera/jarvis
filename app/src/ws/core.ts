@@ -47,6 +47,8 @@ class CoreLink {
     this.levelRaf = requestAnimationFrame(tick);
     this.connect();
     window.jarvis?.onListen(() => this.listenNow());
+    window.jarvis?.onShowcase?.(() => this.showcase("demo"));
+    window.jarvis?.onSleep?.(() => this.toggleSleep());
     this.pollTelemetry();
   }
 
@@ -84,6 +86,33 @@ class CoreLink {
 
   send(msg: Record<string, unknown>): void {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
+  }
+
+  /** Showcase / tour stage directions: open a display full-size, switch the blueprint's tab, clear the deck. */
+  private ui(m: any): void {
+    const s = useStore.getState();
+    if (m.op === "expand") s.set({ expandedCardId: m.card_id && s.cards.some((c) => c.id === m.card_id) ? m.card_id : null });
+    else if (m.op === "expand_key") {
+      const c = s.cards.find((x) => x.data?.key === m.key);
+      if (c) s.set({ expandedCardId: c.id });
+    } else if (m.op === "support_tab") window.dispatchEvent(new CustomEvent("jarvis:support_tab", { detail: { tab: m.tab, tier: m.tier } }));
+    else if (m.op === "clear_cards") {
+      for (const c of s.cards) if (c.kind !== "confirm" && c.kind !== "music" && c.kind !== "video") s.removeCard(c.id);
+      s.set({ expandedCardId: null, rightTab: "displays" });
+    }
+  }
+
+  /** Sleep mode: dim the HUD (⌘⇧S / ⌥⇧S). Waking from the button runs the power-on routine. */
+  toggleSleep(): void {
+    const s = useStore.getState();
+    if (s.asleep) this.send({ type: "power_on" });
+    else this.send({ type: "sleep", enabled: true });
+  }
+
+  /** The preset showcase (⌘⇧D or "what do you have for me today?"). */
+  showcase(which: "demo" | "support_tour" = "demo"): void {
+    this.speaker?.stop();
+    this.send({ type: "showcase", which });
   }
 
   private system(text: string): void {
@@ -252,6 +281,28 @@ class CoreLink {
         break;
       case "system_line":
         this.system(m.text);
+        break;
+      case "system_caption":
+        s.set({ caption: m.text });
+        window.setTimeout(() => { if (useStore.getState().caption === m.text) useStore.getState().set({ caption: "" }); }, 6000);
+        break;
+      case "showcase":
+        s.set({ showcase: m.active ? { active: true, step: m.step ?? 0, total: m.total ?? 0, label: m.label ?? "", mode: m.mode } : null });
+        if (!m.active) window.setTimeout(() => { if (!useStore.getState().showcase) useStore.getState().set({ expandedCardId: null }); }, 2500);
+        break;
+      case "ui":
+        this.ui(m);
+        break;
+      case "sleep":
+        if (m.asleep && !s.asleep) this.speaker?.powerDown();
+        s.set({ asleep: !!m.asleep, ...(m.asleep ? { expandedCardId: null, powerOnAt: 0 } : {}) });
+        if (m.asleep) media.control("pause");
+        break;
+      case "power_on":
+        this.speaker?.powerOn();
+        const at = Date.now();
+        s.set({ asleep: false, powerOnAt: at, expandedCardId: null });
+        window.setTimeout(() => { if (useStore.getState().powerOnAt === at) useStore.getState().set({ powerOnAt: 0 }); }, (m.ms ?? 4000) + 300);
         break;
       case "voice_error":
         this.system(`Voice: ${m.error}`);

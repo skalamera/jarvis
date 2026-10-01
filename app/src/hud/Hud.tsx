@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { createPortal } from "react-dom";
 import { useStore } from "../state/store";
 import { core } from "../ws/core";
 import { HoloCard } from "../cards/HoloCard";
@@ -11,6 +12,7 @@ import { Briefing } from "./Briefing";
 
 const STATE_TEXT: Record<string, string> = {
   idle: "STANDING BY",
+  sleep: "ASLEEP",
   listening: "LISTENING",
   thinking: "PROCESSING",
   speaking: "RESPONDING",
@@ -50,6 +52,7 @@ function StatusBar() {
       <button className={`tog ${micEnabled ? "on" : ""}`} onClick={() => core.setMic(!micEnabled)} title="Microphone">
         {micEnabled ? "🎙 MIC ON" : "🎙 MIC OFF"}
       </button>
+      <button className="tog" onClick={() => core.toggleSleep()} title="Sleep (⌘⇧S) · say “Morning, Jarvis” to power on">☾ SLEEP</button>
       <button className="tog" onClick={() => core.reset()} title="New conversation">⟲ NEW</button>
     </div>
   );
@@ -185,6 +188,16 @@ function Composer() {
   const busy = hud === "thinking" || hud === "speaking";
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        core.toggleSleep();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "d") {
+        e.preventDefault();
+        core.showcase("demo");
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "l") {
         e.preventDefault();
         setLogOpen(!useStore.getState().logOpen);
@@ -359,10 +372,12 @@ function PanelResizer() {
 
 export function Hud() {
   const hud = useStore((s) => s.hud);
+  const asleep = useStore((s) => s.asleep);
+  const powering = useStore((s) => s.powerOnAt > 0);
   const cards = useStore((s) => s.cards);
   const confirmPending = cards.some((c) => c.kind === "confirm" && (c.status ?? "pending") === "pending");
   return (
-    <div className={`hud hud-${hud} ${confirmPending ? "hud-alert" : ""}`}>
+    <div className={`hud hud-${hud} ${confirmPending ? "hud-alert" : ""} ${asleep ? "hud-asleep" : ""} ${powering ? "hud-boot" : ""}`}>
       <div className="bg-grid" />
       <div className="bg-scan" />
       <div className="drag-bar" />
@@ -397,7 +412,102 @@ export function Hud() {
       <Toasts />
       <DropZone />
       <Workbench />
+      <ShowcaseHud />
+      <SleepVeil />
+      <PowerOn />
     </div>
+  );
+}
+
+/** Asleep: the HUD dims, the orb breathes, and a quiet hint says how to wake it. Clicking powers it on. */
+function SleepVeil() {
+  const asleep = useStore((s) => s.asleep);
+  const wake = useStore((s) => s.wakeAvailable && s.micEnabled);
+  return (
+    <AnimatePresence>
+      {asleep && (
+        <motion.div className="sleep-veil" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.25 } }}
+          transition={{ duration: 1.4, ease: "easeInOut" }} onClick={() => core.toggleSleep()}>
+          <div className="sleep-hint">
+            <div className="sleep-t">{wake ? "Say “Morning, Jarvis”" : "Click to power on"}</div>
+            <div className="sleep-s">{wake ? "or “Hey Jarvis” · ⌘⇧S" : "⌘⇧S"}</div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+/** "Morning, Jarvis": a short boot sequence over the HUD (scan line, rings charging, system checks, flare). */
+const BOOT_LINES = ["CORE", "NEURAL INTERFACE", "VOICE SYNTHESIS", "COMMS ARRAY", "MARKET FEEDS", "ALL SYSTEMS"];
+function PowerOn() {
+  const at = useStore((s) => s.powerOnAt);
+  const [n, setN] = useState(0);
+  const [c, setC] = useState({ x: 50, y: 40, r: 26 });  // centre the rings/flare on the orb (vw/vh, vmin)
+  useEffect(() => {
+    if (!at) return;
+    setN(0);
+    const el = document.querySelector(".reactor-wrap") as HTMLElement | null;
+    if (el) {
+      const b = el.getBoundingClientRect();
+      const vmin = Math.min(innerWidth, innerHeight) / 100;
+      setC({ x: ((b.left + b.width / 2) / innerWidth) * 100, y: ((b.top + b.height / 2) / innerHeight) * 100, r: Math.min(b.width, b.height) / 2 / vmin * 0.62 });
+    }
+    const ts = BOOT_LINES.map((_, i) => window.setTimeout(() => setN(i + 1), 380 + i * 360));
+    return () => ts.forEach(window.clearTimeout);
+  }, [at]);
+  return createPortal(
+    <AnimatePresence>
+      {at > 0 && (
+        <motion.div key={at} className="boot" initial={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.6 } }}>
+          <motion.div className="boot-dark" initial={{ opacity: 0.92 }} animate={{ opacity: [0.92, 0.85, 0.6, 0] }}
+            transition={{ duration: 3.4, times: [0, 0.5, 0.78, 1], ease: "easeInOut" }} />
+          <motion.div className="boot-scan" initial={{ top: "-4%" }} animate={{ top: "104%" }} transition={{ duration: 1.5, ease: [0.5, 0, 0.3, 1] }} />
+          <div className="boot-rings" style={{ left: `${c.x}vw`, top: `${c.y}vh`, ["--r" as any]: `${c.r}vmin` }}>
+            {[0, 1, 2].map((i) => (
+              <motion.i key={i} initial={{ scale: 0.2, opacity: 0 }} animate={{ scale: [0.2, 1, 1.12 + i * 0.3], opacity: [0, 0.9, 0] }}
+                transition={{ duration: 1.3, delay: 1.5 + i * 0.32, ease: "easeOut" }} />
+            ))}
+          </div>
+          <motion.div className="boot-flare" style={{ left: `${c.x}vw`, top: `${c.y}vh` }} initial={{ opacity: 0, scale: 0.4 }} animate={{ opacity: [0, 0, 1, 0], scale: [0.4, 0.4, 1.6, 2.4] }}
+            transition={{ duration: 3.4, times: [0, 0.78, 0.82, 1] }} />
+          <div className="boot-log">
+            {BOOT_LINES.slice(0, n).map((l, i) => (
+              <motion.div key={l} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} className={i === BOOT_LINES.length - 1 ? "last" : ""}>
+                <span>{l}</span><i />{i === BOOT_LINES.length - 1 ? <b>ONLINE</b> : <b>OK</b>}
+              </motion.div>
+            ))}
+          </div>
+          <motion.div className="boot-title" style={{ left: `${c.x}vw`, top: `calc(${c.y}vh + ${c.r * 1.25}vmin)` }} initial={{ opacity: 0, letterSpacing: "1.2em" }} animate={{ opacity: [0, 0, 1, 1, 0], letterSpacing: ["1.2em", "1.2em", "0.55em", "0.5em", "0.5em"] }}
+            transition={{ duration: 4, times: [0, 0.55, 0.75, 0.9, 1] }}>J.A.R.V.I.S.</motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>,
+    document.body,
+  );
+}
+
+/** Progress strip while the preset showcase / support tour runs (Esc stops it, like any turn). */
+function ShowcaseHud() {
+  const sc = useStore((s) => s.showcase);
+  const booting = useStore((s) => s.powerOnAt > 0);
+  return createPortal(
+    <AnimatePresence>
+      {sc?.active && !booting && (
+        <motion.div className="sc-hud" initial={{ opacity: 0, y: -14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
+          <span className="sc-dot" />
+          <span className="sc-mode">{sc.mode === "tour" ? "SUPPORT MODEL" : "YOUR DAY"}</span>
+          <AnimatePresence mode="wait">
+            <motion.span key={sc.label} className="sc-label" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}>{sc.label}</motion.span>
+          </AnimatePresence>
+          <span className="sc-bar">
+            {Array.from({ length: Math.max(1, sc.total) }).map((_, i) => <i key={i} className={i < sc.step ? "on" : i === sc.step ? "cur" : ""} />)}
+          </span>
+          <button className="sc-stop" onClick={() => core.cancel()} title="Stop (Esc)">ESC</button>
+        </motion.div>
+      )}
+    </AnimatePresence>,
+    document.body,
   );
 }
 

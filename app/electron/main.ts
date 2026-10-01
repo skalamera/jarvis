@@ -125,6 +125,12 @@ function createWindow(): void {
   else win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
 }
 
+/** The preset showcase from anywhere: ⌥⇧D (in the window ⌘⇧D works too). */
+function showcase(): void {
+  summon(false);
+  win?.webContents.send("jarvis:showcase");
+}
+
 function summon(listen: boolean): void {
   if (!win) return;
   if (!win.isVisible()) win.show();
@@ -148,6 +154,8 @@ function buildTray(): void {
     Menu.buildFromTemplate([
       { label: "Show J.A.R.V.I.S.", accelerator: "Alt+Space", click: () => summon(false) },
       { label: "Talk to J.A.R.V.I.S.", accelerator: "Alt+Shift+Space", click: () => summon(true) },
+      { label: "Brief me on my day", accelerator: "Alt+Shift+D", click: () => showcase() },
+      { label: "Sleep / power on", accelerator: "Alt+Shift+S", click: () => { summon(false); win?.webContents.send("jarvis:sleep"); } },
       { type: "separator" },
       {
         label: "Launch at Login",
@@ -208,6 +216,8 @@ app.whenReady().then(async () => {
   buildTray();
   globalShortcut.register("Alt+Space", () => (win?.isFocused() ? win.hide() : summon(false)));
   globalShortcut.register("Alt+Shift+Space", () => summon(true));
+  globalShortcut.register("Alt+Shift+D", () => showcase());
+  globalShortcut.register("Alt+Shift+S", () => { summon(false); win?.webContents.send("jarvis:sleep"); });
   app.on("activate", () => summon(false));
 });
 

@@ -6,6 +6,7 @@ GET /health, GET /status
 from __future__ import annotations
 
 import asyncio
+import re
 import datetime as dt
 import json
 import logging
@@ -147,6 +148,34 @@ async def ws_endpoint(ws: WebSocket):
     session = Session(send, STATE["hermes"], STATE["voice"])
 
     async def on_utterance(pcm: bytes, via: str) -> None:
+        if via in ("sleep_phrase", "sleep_wake"):
+            # Asleep. "sleep_wake" = the wake-word model fired in the phrase (it also fires on "Morning, Jarvis"), so
+            # it always wakes; the words pick the power-on routine vs a plain wake. "sleep_phrase" = no wake word:
+            # only "Morning, Jarvis" / "Hey Jarvis" count, anything else is ignored.
+            if not session.sleeping:
+                return
+            heard = ""
+            if pcm:
+                try:
+                    heard = await session.voice.stt(pcm16_to_wav(pcm))
+                except Exception:
+                    heard = ""
+            kind = sleep_word(heard)
+            log.info("sleep phrase (%s): %r -> %s", via, heard[:60], kind or "ignored")
+            if kind == "morning":
+                await session.power_on()
+                return
+            if kind != "wake" and via != "sleep_wake":
+                return
+            await session.wake_up()
+            rest = after_wake_word(heard)
+            if rest and not is_noise_transcript(rest, "wake"):  # "Hey Jarvis, what's the weather": answer it
+                await send({"type": "transcript", "text": rest, "via": "wake"})
+                await session.user_input(rest, source="voice")
+            else:
+                await on_mic_event({"type": "listening", "via": "wake"})
+                await mic.listen_now()
+            return
         await session.state("thinking")
         try:
             text = await session.voice.stt(pcm16_to_wav(pcm))
@@ -155,12 +184,14 @@ async def ws_endpoint(ws: WebSocket):
             await session.state("idle")
             return
         await send({"type": "transcript", "text": text, "via": via})
-        if text and text.strip(" .").lower() not in ("", "you", "thank you", "thanks for watching"):
+        if not is_noise_transcript(text, via):
             await session.user_input(text, source="voice")
         else:
             await session.state("idle")
 
     async def on_mic_event(ev: dict) -> None:
+        if ev["type"] == "wake" and session.sleeping:  # "Hey Jarvis" wakes it the usual way (no cinematic)
+            await session.wake_up()
         if ev["type"] == "listening":
             await session.cancel_turn()  # barge-in: stop speaking / thinking immediately
             await session.state("listening")
@@ -171,6 +202,7 @@ async def ws_endpoint(ws: WebSocket):
         await send(ev)
 
     mic = MicPipeline(on_mic_event, on_utterance, STATE["wake"])
+    session.mic = mic
     follow_up_task: asyncio.Task | None = None
 
     def cancel_follow_up() -> None:
@@ -194,6 +226,19 @@ async def ws_endpoint(ws: WebSocket):
                 continue
             data = json.loads(msg.get("text") or "{}")
             t = data.get("type")
+            if t == "sleep":
+                cancel_follow_up()
+                if data.get("enabled", True):
+                    await session.go_to_sleep()  # no spoken line: nothing to wait for
+                else:
+                    await session.wake_up()
+                continue
+            if t == "power_on":  # the HUD's wake button / ⌘⇧S while asleep: same routine as "Morning, Jarvis"
+                cancel_follow_up()
+                await session.power_on()
+                continue
+            if t in ("ptt_start", "listen_now") and session.sleeping:
+                await session.wake_up()
             if t == "ptt_start":
                 cancel_follow_up()
                 await on_mic_event({"type": "listening", "via": "ptt"})
@@ -351,6 +396,49 @@ async def ws_endpoint(ws: WebSocket):
         await mic.cancel()
         briefing.listeners.discard(send)
         await session.close()
+
+
+_MORNING = re.compile(r"\b(?:good\s+)?morning[\s,.!]*(?:jarvis|jarvas|jervis|travis|service)\b|\b(?:jarvis|jervis)[\s,.!]+(?:good\s+)?morning\b", re.I)
+_HEY = re.compile(r"\b(?:hey|hi|okay|ok)[\s,.!]*(?:jarvis|jervis|jarvas)\b", re.I)
+
+
+def after_wake_word(text: str) -> str:
+    """'Hey Jarvis, what's the weather?' -> "what's the weather?" ('' when nothing follows the wake phrase)."""
+    m = _HEY.search(text or "")
+    rest = (text[m.end():] if m else text or "").lstrip(" ,.!?-")
+    return rest if len(rest.split()) >= 2 else ""
+
+
+def sleep_word(text: str) -> str | None:
+    """What a phrase heard while asleep means: 'morning' (power-on routine + briefing), 'wake', or None (ignore)."""
+    t = text or ""
+    if _MORNING.search(t):
+        return "morning"
+    if _HEY.search(t):
+        return "wake"
+    return None
+
+
+_SOUND_TAG = re.compile(r"^[\s.]*(?:[\[(*♪][^\])*♪]*[\])*♪]?[\s.,]*)+$")
+_FILLER = {"", "you", "thank you", "thanks for watching", "thanks", "bye", "okay", "ok", "um", "uh", "hmm", "mm"}
+
+
+def is_noise_transcript(text: str, via: str = "") -> bool:
+    """Whisper-style annotations of non-speech audio ("*sad music*", "[Music]", "(applause)", "♪") and filler that
+    room noise produces. In the open follow-up window (no wake word) one or two stray words are noise too."""
+    t = (text or "").strip()
+    if not t or _SOUND_TAG.match(t):
+        return True
+    low = t.strip(" .!?,").lower()
+    if low in _FILLER:
+        return True
+    if re.fullmatch(r"(.+?)\s*\(\1\)", low):  # "3.5mm (3.5mm)": a transcriber echo, not speech
+        return True
+    # The follow-up window has no wake word, so it hears the room (TV, people nearby). Short fragments there are
+    # almost always background chatter; real follow-ups are a few words, or one of the short replies below.
+    short_ok = {"yes", "no", "yeah", "nope", "confirm", "cancel", "stop", "thanks", "thank you", "go ahead", "do it",
+                "send it", "next", "pause", "skip", "more", "tell me more", "why", "how", "continue", "keep going"}
+    return via == "follow_up" and len(low.split()) < 3 and low not in short_ok
 
 
 def main() -> None:

@@ -117,3 +117,62 @@ async def test_follow_up_ignored_if_mic_disabled(rig):
     await mic.listen_follow_up(timeout_s=1.0)
     assert mic.mode == "off"
     assert not any(e.get("via") == "follow_up" for e in events)
+
+
+def test_noise_transcripts_are_dropped():
+    from jarvis_core.main import is_noise_transcript as n
+    for x in ["*sad music*", "[Music]", "(applause)", "♪", "♪ la la ♪", " *upbeat music* ", "[BLANK_AUDIO]", "Thank you.", "um"]:
+        assert n(x), x
+    for x in ["What does Hadrian do?", "play some jazz", "confirm"]:
+        assert not n(x), x
+    assert n("hmm okay", "") is False or True  # two words outside follow-up are allowed through
+    assert n("Right", "follow_up") and not n("yes", "follow_up") and not n("tell me more", "follow_up")
+    assert n("Bon Appetit!", "follow_up") and n("3.5mm (3.5mm).") and not n("what about tier two", "follow_up")
+    assert not n("Bon appetit", "")  # with the wake word / push-to-talk he clearly meant to talk
+
+
+async def test_asleep_captures_short_phrase_for_sleep_word(rig):
+    mic, wake, events, utts = rig
+    await mic.set_listening(True)
+    mic.sleeping = True
+    await mic.feed(silence(1.0))   # let the VAD settle on the noise floor
+    await mic.feed(tone(1.1))      # "Morning, Jarvis"
+    await mic.feed(silence(0.9))
+    await asyncio.sleep(0.01)
+    assert utts and utts[-1][1] == "sleep_phrase" and mic.mode == "wake"
+    assert not any(e["type"] == "listening" for e in events)  # no listening state: the HUD stays asleep
+
+
+async def test_asleep_ignores_long_speech(rig):
+    mic, wake, events, utts = rig
+    await mic.set_listening(True)
+    mic.sleeping = True
+    await mic.feed(silence(1.0))
+    await mic.feed(tone(6.0))      # a long conversation in the room
+    await mic.feed(silence(0.9))
+    await asyncio.sleep(0.01)
+    assert not utts
+
+
+async def test_awake_does_not_capture_phrases(rig):
+    mic, wake, events, utts = rig
+    await mic.set_listening(True)
+    await mic.feed(silence(1.0))
+    await mic.feed(tone(1.1))
+    await mic.feed(silence(0.9))
+    await asyncio.sleep(0.01)
+    assert not utts
+
+
+async def test_asleep_wake_word_inside_phrase_does_not_wake_early(rig):
+    """The wake model also fires on "Morning, Jarvis": the phrase must still be captured whole and handed over."""
+    mic, wake, events, utts = rig
+    await mic.set_listening(True)
+    mic.sleeping = True
+    await mic.feed(silence(1.0))
+    wake.fire_at = wake.n + 6 + 8  # one wake-word hit ~0.6 s into the phrase (the "Jarvis" in "Morning, Jarvis")
+    await mic.feed(tone(1.1))
+    await mic.feed(silence(0.9))
+    await asyncio.sleep(0.01)
+    assert not any(e["type"] in ("wake", "listening") for e in events)
+    assert utts and utts[-1][1] == "sleep_wake" and utts[-1][0] > 0

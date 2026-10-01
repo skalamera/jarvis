@@ -113,7 +113,7 @@ function DiffView({ diff }: { diff: string }) {
 }
 
 // ------------------------------------------------------------------ uploaded files
-const KIND_ICON: Record<string, string> = { image: "◩", csv: "▦", xlsx: "▦", pdf: "▤", docx: "▤", code: "⟨⟩", text: "≡", binary: "◇" };
+const KIND_ICON: Record<string, string> = { image: "◩", video: "▶", csv: "▦", xlsx: "▦", pdf: "▤", docx: "▤", code: "⟨⟩", text: "≡", binary: "◇" };
 
 export function ArtifactCard({ card, expanded = false }: { card: Card; expanded?: boolean }) {
   const a = card.data?.artifact;
@@ -146,6 +146,12 @@ export function ArtifactCard({ card, expanded = false }: { card: Card; expanded?
       )}
       {busy && <div className="ws-busy"><span className="ws-spin" />{busy}…</div>}
       {v.type === "image" && <ImageView card={card} run={run} busy={!!busy} expanded={expanded} />}
+      {v.type === "video" && (
+        <div className={`ws-vid ${expanded ? "xl" : ""}`} onClick={(e) => e.stopPropagation()}>
+          <video src={core.artifactUrl(a.id, a.version)} controls autoPlay muted loop playsInline />
+        </div>
+      )}
+      {a.versions?.[0]?.source === "generated" && <div className="gen-prompt" title={a.versions[0].note}>✦ {String(a.versions[0].note).replace(/^Generated:\s*/, "")}</div>}
       {v.type === "sheet" && <SheetView card={card} run={run} expanded={expanded} />}
       {(v.type === "text") && <TextView card={card} run={run} expanded={expanded} />}
       {v.type === "document" && (
@@ -417,6 +423,40 @@ function ArchGraph({ mods, edges, notes, sel, onSel }: { mods: Mod[]; edges: any
         })}
       </svg>
       <div className="cb-legend"><span>importer</span><span className="cb-legend-arrow">⟶</span><span>dependency</span><span className="muted"> · size = lines of code · click a node</span></div>
+    </div>
+  );
+}
+
+/** A Gemini image / Veo video being made: an animated "rendering" field with elapsed time, or the failure reason.
+ *  Replaced in place by the finished file card (same display key). */
+export function GeneratingCard({ card }: { card: Card }) {
+  const g = card.data?.generating ?? {};
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (g.error) return;
+    const t = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(t);
+  }, [g.error]);
+  const secs = Math.max(0, Math.round(now / 1000 - (g.started ?? now / 1000)));
+  const eta = g.eta_s ?? (g.kind === "video" ? 90 : 15);
+  const pct = Math.min(96, (secs / eta) * 100 * 0.9);
+  const ratio = g.kind === "video" ? (g.aspect === "9:16" ? "9 / 16" : "16 / 9") : "16 / 10";
+  return (
+    <div className={`gen ${g.error ? "err" : ""}`}>
+      <div className="gen-stage" style={{ aspectRatio: ratio }}>
+        {!g.error && <><div className="gen-noise" /><div className="gen-sweep" /><div className="gen-orb" /></>}
+        <div className="gen-label">
+          {g.error ? (
+            <><b>Couldn't make the {g.kind}</b><span>{g.error}</span></>
+          ) : (
+            <><b>{g.kind === "video" ? "RENDERING VIDEO" : "GENERATING IMAGE"}</b>
+              <span>{g.kind === "video" ? `${g.duration ?? 8}s clip · ` : ""}{secs}s elapsed{g.kind === "video" ? " · usually 1–3 min" : ""}</span></>
+          )}
+        </div>
+      </div>
+      {!g.error && <div className="gen-bar"><i style={{ width: `${pct}%` }} /></div>}
+      <div className="gen-prompt">✦ {g.prompt}</div>
+      <div className="muted small">{g.model}</div>
     </div>
   );
 }

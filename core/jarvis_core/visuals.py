@@ -136,6 +136,16 @@ def cards_from_feed(item: dict) -> list[dict]:
         place = ", ".join(x for x in (loc.get("name"), loc.get("region") if loc.get("country") == "US"
                                       else loc.get("country")) if x)
         return [card("weather", place or "Weather", r)]
+    if tool == "cars_nearby" and r.get("cars") is not None:
+        return [card("car_listings", f"{r.get('query', 'Cars')} · near {r.get('near', '')}", r)]
+    if tool == "support_model" and r.get("tiers"):
+        return [card("support_blueprint", r.get("title") or "Hadrius Support Model", r)]
+    if tool == "demo_note" and r.get("text"):
+        return [card("notice", r.get("title") or "", r)]
+    if tool in ("image_generate", "video_generate") and r.get("generating"):
+        g = r["generating"]
+        what = "Video" if g.get("kind") == "video" else "Image"
+        return [card("generating", f"{what} · {'failed' if g.get('error') else 'generating'}", r)]
     if tool in ARTIFACT_TOOLS and r.get("artifact"):
         a = r["artifact"]
         return [card("artifact", f"{a['filename']} · v{a['version']}", r)]
@@ -148,7 +158,7 @@ def cards_from_feed(item: dict) -> list[dict]:
     return []
 
 
-ARTIFACT_TOOLS = {"file_open", "file_edit", "file_write", "sheet_edit", "image_edit", "file_create", "file_revert",
+ARTIFACT_TOOLS = {"image_generate", "video_generate", "file_open", "file_edit", "file_write", "sheet_edit", "image_edit", "file_create", "file_revert",
                   "file_upload"}
 
 

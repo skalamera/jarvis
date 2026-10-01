@@ -1,4 +1,4 @@
-export type HudState = "idle" | "listening" | "thinking" | "speaking" | "confirm" | "offline";
+export type HudState = "idle" | "listening" | "thinking" | "speaking" | "confirm" | "offline" | "sleep";
 
 export interface Card {
   id: string;
@@ -99,6 +99,8 @@ declare global {
     jarvis?: {
       config: () => Promise<{ coreUrl: string; httpUrl: string; token: string }>;
       onListen: (cb: () => void) => () => void;
+      onShowcase?: (cb: () => void) => () => void;
+      onSleep?: (cb: () => void) => () => void;
       open: (url: string) => void;
       pathForFile?: (f: File) => string;
       pickFolder?: () => Promise<string | null>;

@@ -8,6 +8,16 @@ contextBridge.exposeInMainWorld("jarvis", {
     return () => ipcRenderer.removeListener("jarvis:listen", h);
   },
   open: (url: string) => ipcRenderer.send("jarvis:open", url),
+  onSleep: (cb: () => void) => {
+    const h = () => cb();
+    ipcRenderer.on("jarvis:sleep", h);
+    return () => ipcRenderer.removeListener("jarvis:sleep", h);
+  },
+  onShowcase: (cb: () => void) => {
+    const h = () => cb();
+    ipcRenderer.on("jarvis:showcase", h);
+    return () => ipcRenderer.removeListener("jarvis:showcase", h);
+  },
   /** Absolute path of a dropped file / folder (lets a dropped project folder be mapped in place). */
   pathForFile: (f: File): string => webUtils.getPathForFile(f),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke("jarvis:pickFolder"),

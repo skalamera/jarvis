@@ -9,6 +9,7 @@ The model has no tool that can confirm its own proposal.
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import os
 import sqlite3
@@ -23,6 +24,20 @@ DB_PATH = STATE_DIR / "jarvis.db"
 AUDIT_PATH = STATE_DIR / "actions.jsonl"
 ACTION_TTL_S = 15 * 60
 FEED_KEEP = 500
+
+# When set (a list), record_result appends feed items to it instead of writing the feed. The showcase uses this to
+# fetch real data ahead of time and reveal each display on cue. A ContextVar so asyncio.to_thread carries it along.
+_CAPTURE: contextvars.ContextVar[list | None] = contextvars.ContextVar("jarvis_feed_capture", default=None)
+
+
+@contextmanager
+def capture():
+    items: list[dict] = []
+    tok = _CAPTURE.set(items)
+    try:
+        yield items
+    finally:
+        _CAPTURE.reset(tok)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS actions (
@@ -75,6 +90,12 @@ def _audit(entry: dict) -> None:
 # ---------------------------------------------------------------- feed (visual cards)
 
 def record_result(tool: str, account: str | None, args: dict, result: Any) -> int:
+    cap = _CAPTURE.get()
+    if cap is not None:  # a showcase is preparing its displays: hold them instead of publishing now
+        cap.append({"seq": 0, "ts": time.time(), "tool": tool, "account": account,
+                    "args": json.loads(json.dumps(args, default=str)),
+                    "result": json.loads(json.dumps(result, default=str))})
+        return 0
     with db() as c:
         cur = c.execute(
             "INSERT INTO feed(ts, tool, account, args, result) VALUES (?,?,?,?,?)",

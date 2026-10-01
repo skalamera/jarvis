@@ -13,6 +13,7 @@ const PALETTE: Record<HudState, [string, string]> = {
   speaking: ["#8fe9ff", "#23a6ff"],
   confirm: ["#ffb020", "#ff6a00"],
   offline: ["#ff4d5e", "#5a1020"],
+  sleep: ["#14476b", "#061a2c"],
 };
 
 /** Shared animated values, smoothed each frame (avoids React re-renders at 60fps). */
@@ -20,14 +21,20 @@ function useDrive() {
   const d = useRef({ level: 0, energy: 0.3, spin: 0.2, color: new THREE.Color(PALETTE.idle[0]), color2: new THREE.Color(PALETTE.idle[1]) });
   useFrame((_, dt) => {
     const s = useStore.getState();
-    const target = s.hud === "speaking" ? s.outLevel : s.hud === "listening" ? s.micLevel * 1.6 : 0;
+    // power-on: 0-2.6 s charge (energy and spin climb), 2.7 s flare, then settle into the normal state
+    const pt = s.powerOnAt ? (Date.now() - s.powerOnAt) / 1000 : -1;
+    const powering = pt >= 0 && pt < 4.2;
+    const flare = powering ? (pt < 2.7 ? (pt / 2.7) ** 2 * 0.9 : Math.max(0, 1.6 - (pt - 2.7) * 1.1)) : 0;
+    const target = powering ? flare * 0.8 : s.hud === "speaking" ? s.outLevel : s.hud === "listening" ? s.micLevel * 1.6 : 0;
     const k = 1 - Math.exp(-dt * 14);
     d.current.level += (Math.min(1, target) - d.current.level) * k;
-    const e = { idle: 0.28, listening: 0.75, thinking: 0.9, speaking: 0.8, confirm: 1, offline: 0.12 }[s.hud];
-    d.current.energy += (e - d.current.energy) * (1 - Math.exp(-dt * 3));
-    const sp = { idle: 0.15, listening: 0.35, thinking: 1.4, speaking: 0.45, confirm: 0.25, offline: 0.03 }[s.hud];
-    d.current.spin += (sp - d.current.spin) * (1 - Math.exp(-dt * 2));
-    const [a, b] = PALETTE[s.hud];
+    const breath = 0.05 + 0.03 * Math.sin(Date.now() / 1400);  // asleep: a slow breathing glow
+    const st = s.asleep && !powering ? "sleep" : s.hud;
+    const e = powering ? 0.15 + flare * 0.85 : { idle: 0.28, listening: 0.75, thinking: 0.9, speaking: 0.8, confirm: 1, offline: 0.12, sleep: breath }[st];
+    d.current.energy += (e - d.current.energy) * (1 - Math.exp(-dt * (powering ? 8 : s.asleep ? 1.2 : 3)));
+    const sp = powering ? 0.05 + flare * 2.6 : { idle: 0.15, listening: 0.35, thinking: 1.4, speaking: 0.45, confirm: 0.25, offline: 0.03, sleep: 0.02 }[st];
+    d.current.spin += (sp - d.current.spin) * (1 - Math.exp(-dt * (powering ? 5 : 2)));
+    const [a, b] = PALETTE[st];
     d.current.color.lerp(new THREE.Color(a), 1 - Math.exp(-dt * 4));
     d.current.color2.lerp(new THREE.Color(b), 1 - Math.exp(-dt * 4));
   });
