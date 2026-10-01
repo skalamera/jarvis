@@ -14,10 +14,10 @@ import time
 from contextlib import asynccontextmanager
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
 
-from jarvis_google import markets, places, pylon, routes, store
+from jarvis_google import artifacts, code, markets, places, pylon, routes, sports, store
 from jarvis_google import tools as gtools
 from jarvis_google.accounts import linked_accounts
 
@@ -38,9 +38,9 @@ STATE: dict = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     STATE["hermes"] = HermesClient(settings.hermes_url, settings.hermes_key, settings.hermes_model,
-                                   settings.hermes_provider)
+                                   settings.hermes_provider, settings.hermes_reasoning)
     STATE["voice"] = Voice(settings.voice_url, settings.voice_key, settings.voice, settings.voice_model,
-                           settings.voice_speed, settings.voice_seed, settings.voice_steps)
+                           settings.voice_speed, settings.voice_seed, settings.voice_steps, settings.voice_language)
     await STATE["voice"].resolve()  # before accepting clients, so the very first sentence uses the right voice
     STATE["wake"] = await asyncio.to_thread(WakeWord, settings.wake_threshold)
     asyncio.create_task(STATE["voice"].warm())
@@ -105,6 +105,33 @@ async def telemetry(request: Request):
     return data
 
 
+@app.post("/upload")
+async def upload(request: Request, files: list[UploadFile] = File(...)):
+    """Files dropped / picked in the HUD. Stored as sandboxed, versioned copies; the HUD then sends `attach`."""
+    if not _authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    out, errors = [], []
+    for f in files[:20]:
+        data = await f.read(artifacts.MAX_UPLOAD + 1)
+        try:
+            m = await asyncio.to_thread(artifacts.save_upload, f.filename or "upload", data, f.content_type)
+            out.append({"id": m["id"], "filename": m["filename"], "kind": m["kind"], "size": m["size"]})
+        except Exception as e:
+            errors.append(f"{f.filename}: {e}"[:200])
+    return {"files": out, "errors": errors}
+
+
+@app.get("/artifact/{artifact_id}/raw")
+async def artifact_raw(artifact_id: str, request: Request, v: int = 0):
+    if not _authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        path, mime = artifacts.raw_path(artifact_id, v or None)
+    except (ValueError, FileNotFoundError):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(path, media_type=mime, headers={"Cache-Control": "no-store"})
+
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     if settings.token and not secrets.compare_digest(ws.query_params.get("token", ""), settings.token):
@@ -137,11 +164,21 @@ async def ws_endpoint(ws: WebSocket):
         if ev["type"] == "listening":
             await session.cancel_turn()  # barge-in: stop speaking / thinking immediately
             await session.state("listening")
+            # If another app swapped VoiceStudio's engine (e.g. a video render), reload ours while he talks
+            asyncio.create_task(session.voice.keep_warm())
         elif ev["type"] == "listening_end" and ev.get("empty"):
             await session.state("idle")
         await send(ev)
 
     mic = MicPipeline(on_mic_event, on_utterance, STATE["wake"])
+    follow_up_task: asyncio.Task | None = None
+
+    def cancel_follow_up() -> None:
+        nonlocal follow_up_task
+        if follow_up_task and not follow_up_task.done():
+            follow_up_task.cancel()
+        follow_up_task = None
+
     await session.hello()
     briefing.listeners.add(send)
     await send(briefing.snapshot())
@@ -158,19 +195,40 @@ async def ws_endpoint(ws: WebSocket):
             data = json.loads(msg.get("text") or "{}")
             t = data.get("type")
             if t == "ptt_start":
+                cancel_follow_up()
                 await on_mic_event({"type": "listening", "via": "ptt"})
                 await mic.ptt_start()
             elif t == "listen_now":
+                cancel_follow_up()
                 await on_mic_event({"type": "listening", "via": "hotkey"})
                 await mic.listen_now()
             elif t == "ptt_end":
                 await mic.ptt_end()
             elif t == "mic":
+                cancel_follow_up()
                 await mic.set_listening(bool(data.get("enabled", True)))
             elif t == "speaking_audio":
                 mic.suspended = bool(data.get("playing"))  # avoid self-triggering the wake word
+            elif t == "playback_done":
+                cancel_follow_up()
+                was_speaking = session._state == "speaking" and not session._busy()
+                await session.handle(data)
+                if (was_speaking
+                        and settings.follow_up_s > 0
+                        and mic.wake_enabled
+                        and mic.wake.available):
+                    async def start_follow_up():
+                        try:
+                            await asyncio.sleep(0.3)
+                            if session._state == "idle" and not session._busy() and mic.mode == "wake":
+                                await mic.listen_follow_up(settings.follow_up_s)
+                        except asyncio.CancelledError:
+                            pass
+                    follow_up_task = asyncio.create_task(start_follow_up())
             elif t == "ping":
-                await send({"type": "pong"})
+                await send({"type": "pong",
+                            "hermes": await STATE["hermes"].health(),
+                            "voice": await STATE["voice"].health()})
             elif t == "rpc":
                 async def run_rpc(d=data):
                     op, args, req = str(d.get("op", "")), dict(d.get("args") or {}), d.get("req")
@@ -192,6 +250,14 @@ async def ws_endpoint(ws: WebSocket):
                     except Exception as e:
                         await send({"type": "toast", "text": f"Couldn't load {d.get('symbol', 'that')}: {e}"[:200], "error": True})
                 asyncio.create_task(run_market())
+            elif t == "game_open":
+                async def run_game(d=data):
+                    try:
+                        await asyncio.to_thread(sports.game_open, str(d.get("league", ""))[:20], str(d.get("event_id", ""))[:20])
+                        await session._flush_feed("direct")
+                    except Exception as e:
+                        await send({"type": "toast", "text": f"Couldn't load that game: {e}"[:200], "error": True})
+                asyncio.create_task(run_game())
             elif t == "place_open":
                 async def run_place(d=data):
                     try:
@@ -222,6 +288,41 @@ async def ws_endpoint(ws: WebSocket):
                     if op == "pylon_open" and r.get("ok"):
                         await session._flush_feed("direct")
                 asyncio.create_task(run_pylon())
+            elif t == "attach":
+                # files just uploaded: show each one, and hand them to the next turn as context
+                items = [i for i in (data.get("files") or []) if isinstance(i, dict)][:20]
+                session.attach(items)
+                async def run_attach(items=items):
+                    for it in items:
+                        try:
+                            m = await asyncio.to_thread(artifacts._meta, str(it.get("id", "")))
+                            await asyncio.to_thread(store.record_result, "file_upload", None, {"artifact_id": m["id"]},
+                                                    artifacts.card_data(m))
+                        except Exception as e:
+                            await send({"type": "toast", "text": f"Couldn't open {it.get('filename')}: {e}"[:200], "error": True})
+                    await session._flush_feed("direct")
+                asyncio.create_task(run_attach())
+            elif t == "focus":
+                f = data.get("focus")
+                session.set_focus(f if isinstance(f, dict) else None)
+            elif t == "workspace":
+                # click-only ops on file / code cards (allow-listed); writes are versioned + audit-logged
+                async def run_ws(d=data):
+                    op, args, req = str(d.get("op", "")), dict(d.get("args") or {}), d.get("req")
+                    fn = artifacts.CLICK_OPS.get(op) or code.CLICK_OPS.get(op)
+                    try:
+                        r = {"ok": True, "result": await asyncio.to_thread(fn, **args)} if fn else {"ok": False, "error": "operation not allowed"}
+                    except Exception as e:
+                        r = {"ok": False, "error": f"{e}"[:300]}
+                    await send({"type": "workspace_result", "op": op, "req": req, **r})
+                    if r.get("ok") and op in ("artifact_save_text", "artifact_sheet_set", "artifact_image_op",
+                                               "artifact_revert", "code_undo"):
+                        session.notes.append(f"Stephen used a file/code card: {op} on {args.get('artifact_id') or args.get('change_id')}"
+                                             f" -> {(r.get('result') or {}).get('text', '')} (re-read before editing it again)")
+                    if r.get("ok") and op == "code_open_folder":
+                        session.set_focus({"type": "project", "root": args.get("path"), "name": str(args.get("path", "")).rstrip("/").split("/")[-1]})
+                        await session._flush_feed("direct")
+                asyncio.create_task(run_ws())
             elif t == "briefing_refresh":
                 asyncio.create_task(briefing.refresh("manual"))
             elif t == "briefing_action":
@@ -237,12 +338,17 @@ async def ws_endpoint(ws: WebSocket):
                         session.notes.append(f"Stephen used the briefing panel: {d.get('action')} on item {d.get('item_id')}.")
                 asyncio.create_task(run_action())
             else:
+                if t in ("user_text", "cancel", "reset"):
+                    cancel_follow_up()
+                    await mic.cancel()
                 await session.handle(data)
     except WebSocketDisconnect:
         pass
     except Exception:
         log.exception("ws loop crashed")
     finally:
+        cancel_follow_up()
+        await mic.cancel()
         briefing.listeners.discard(send)
         await session.close()
 

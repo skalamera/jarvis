@@ -6,6 +6,7 @@ import { HoloCard } from "../cards/HoloCard";
 import { MarkdownCard } from "../cards/Cards";
 import { fmtEventTime } from "../cards/format";
 import { Reactor } from "./Reactor";
+import { AttachChips, AttachControls, DropZone, Workbench } from "./Workbench";
 import { Briefing } from "./Briefing";
 
 const STATE_TEXT: Record<string, string> = {
@@ -107,26 +108,29 @@ function ActivityFeed() {
   );
 }
 
+export function setLogOpen(open: boolean) {
+  localStorage.setItem("jarvis.logOpen", open ? "1" : "0");
+  useStore.getState().set(open ? { logOpen: true, logUnseen: 0 } : { logOpen: false });
+}
+
+/** The conversation log: hidden by default (the orb + captions are the main view), opened from the composer. */
 function Transcript() {
   const messages = useStore((s) => s.messages);
+  const open = useStore((s) => s.logOpen);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: "smooth" });
-  }, [messages]);
+    if (open) ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: messages.length ? "smooth" : "auto" });
+  }, [messages, open]);
   return (
-    <div className="transcript" ref={ref}>
-      {messages.length === 0 && (
-        <div className="welcome">
-          <div className="welcome-title">Good {greeting()}, Stephen.</div>
-          <div className="muted">Say “Hey Jarvis”, press ⌥⇧Space, or type below.</div>
-          <div className="suggest">
-            {["What's on my calendar today?", "Summarize my unread work email", "Draft a reply to my latest email", "What's new in Linear?"].map((s) => (
-              <button key={s} className="chip clickable" onClick={() => core.sendText(s)}>{s}</button>
-            ))}
-          </div>
-        </div>
-      )}
-      {messages.map((m) => (
+    <section className={`log ${open ? "open" : ""}`} aria-hidden={!open}>
+      <div className="log-head">
+        <span>CONVERSATION LOG</span>
+        <span className="log-count">{messages.filter((m) => m.role !== "system").length}</span>
+        <button className="log-close" onClick={() => setLogOpen(false)} title="Hide log (⌘L)">✕</button>
+      </div>
+      <div className="transcript" ref={ref}>
+        {messages.length === 0 && <div className="muted small log-empty">Nothing said yet this session.</div>}
+        {messages.map((m) => (
         <div key={m.id} className={`msg msg-${m.role} ${m.error ? "msg-error" : ""}`}>
           {m.role === "user" && <div className="msg-who">YOU {m.source === "voice" ? "· 🎙" : ""}</div>}
           {m.role === "jarvis" && <div className="msg-who">J.A.R.V.I.S.{m.elapsed ? ` · ${m.elapsed.toFixed(1)}s` : ""}</div>}
@@ -136,9 +140,35 @@ function Transcript() {
             <div className="msg-text">{m.text}</div>
           )}
         </div>
-      ))}
-    </div>
+        ))}
+      </div>
+    </section>
   );
+}
+
+function LogToggle() {
+  const open = useStore((s) => s.logOpen);
+  const unseen = useStore((s) => s.logUnseen);
+  return (
+    <button className={`log-btn ${open ? "on" : ""}`} onClick={() => setLogOpen(!open)} title={`${open ? "Hide" : "Show"} conversation log (⌘L)`}>
+      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 5h16v2H4V5Zm0 6h16v2H4v-2Zm0 6h10v2H4v-2Z" /></svg>
+      {!open && unseen > 0 && <b>{unseen > 9 ? "9+" : unseen}</b>}
+    </button>
+  );
+}
+
+/** A reply as caption text: markdown and jarvis-visual blocks stripped, capped at a few sentences. */
+function speakableCaption(text: string): string {
+  const plain = text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*_`#>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (plain.length <= 280) return plain;
+  const cut = plain.slice(0, 280);
+  const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "));
+  return (end > 120 ? cut.slice(0, end + 1) : cut.replace(/\s+\S*$/, "") + " …");
 }
 
 function greeting(): string {
@@ -155,6 +185,12 @@ function Composer() {
   const busy = hud === "thinking" || hud === "speaking";
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "l") {
+        e.preventDefault();
+        setLogOpen(!useStore.getState().logOpen);
+        return;
+      }
+      if (e.key === "Escape" && useStore.getState().logOpen) { setLogOpen(false); return; }
       if (e.key === "Escape") core.cancel();
       if (e.key === "/" && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
         e.preventDefault();
@@ -171,7 +207,11 @@ function Composer() {
     setText("");
   };
   return (
+    <div className="composer-wrap">
+    <AttachChips />
     <div className="composer">
+      <LogToggle />
+      <AttachControls />
       <button
         className={`mic-btn ${hud === "listening" ? "live" : ""}`}
         title="Click to talk · hold to push-to-talk"
@@ -199,6 +239,10 @@ function Composer() {
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && submit()}
+        onPaste={(e) => {
+          const files = Array.from(e.clipboardData.files);
+          if (files.length) { e.preventDefault(); core.upload(files); }  // pasted screenshots / images
+        }}
         placeholder={connected ? "Speak or type a command…" : "Reconnecting to core…"}
         disabled={!connected}
         autoFocus
@@ -209,19 +253,55 @@ function Composer() {
         <button className="send-btn" onClick={submit} disabled={!text.trim()} title="Send (Enter)">➤</button>
       )}
     </div>
+    </div>
   );
 }
 
+/** Under the orb: what he just said (small), then JARVIS's current line (large). Welcome text when idle and new. */
 function Caption() {
   const caption = useStore((s) => s.caption);
+  const hud = useStore((s) => s.hud);
+  const messages = useStore((s) => s.messages);
+  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  const showUser = !!lastUser && (hud === "thinking" || hud === "speaking" || !!caption) && Date.now() - lastUser.at < 120_000;
+  const fresh = messages.length === 0;
+  // After he stops talking (or with voice off), keep his last reply under the orb, dimmed, for a while.
+  const lastJarvis = [...messages].reverse().find((m) => m.role === "jarvis");
+  const [, tick] = useState(0);
+  useEffect(() => { const t = window.setInterval(() => tick((n) => n + 1), 5000); return () => window.clearInterval(t); }, []);
+  const lingering = !caption && hud === "idle" && lastJarvis && !lastJarvis.pending && lastJarvis.text && Date.now() - lastJarvis.at < 60_000 ? lastJarvis : null;
+  const linger = lingering ? speakableCaption(lingering.text) : "";
   return (
-    <AnimatePresence mode="wait">
-      {caption && (
-        <motion.div key={caption} className="caption" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.18 }}>
-          {caption}
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <div className="caption-zone">
+      <AnimatePresence>
+        {showUser && (
+          <motion.div key={lastUser!.id} className="caption-you" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.25 }}>
+            “{lastUser!.text}”
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence mode="wait">
+        {caption ? (
+          <motion.div key={caption} className="caption" initial={{ opacity: 0, y: 8, filter: "blur(4px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} exit={{ opacity: 0, y: -6, filter: "blur(3px)" }} transition={{ duration: 0.22 }}>
+            {caption}
+          </motion.div>
+        ) : linger ? (
+          <motion.div key={`l_${lingering!.id}`} className="caption caption-rest" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }}>
+            {linger}
+          </motion.div>
+        ) : fresh && hud !== "thinking" && hud !== "listening" ? (
+          <motion.div key="welcome" className="welcome" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <div className="welcome-title">Good {greeting()}, Stephen.</div>
+            <div className="muted">Say “Hey Jarvis”, press ⌥⇧Space, or type below.</div>
+            <div className="suggest">
+              {["What's on my calendar today?", "Summarize my unread work email", "Any new Slack messages?", "What's the weather?"].map((s) => (
+                <button key={s} className="chip clickable" onClick={() => core.sendText(s)}>{s}</button>
+              ))}
+            </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </div>
   );
 }
 
@@ -300,11 +380,13 @@ export function Hud() {
         <ActivityFeed />
       </aside>
       <main className="center">
-        <div className="reactor-wrap">
-          <Reactor />
-          <div className={`state-label st-${hud}`}>{STATE_TEXT[hud]}</div>
+        <div className="stage">
+          <div className="reactor-wrap">
+            <Reactor />
+            <div className={`state-label st-${hud}`}>{STATE_TEXT[hud]}</div>
+          </div>
+          <Caption />
         </div>
-        <Caption />
         <Transcript />
         <Composer />
       </main>
@@ -313,6 +395,8 @@ export function Hud() {
         <RightPanel />
       </aside>
       <Toasts />
+      <DropZone />
+      <Workbench />
     </div>
   );
 }
@@ -326,6 +410,12 @@ function RightPanel() {
   const n = (b.data ? b.data.todos.length + b.data.priority.length : 0) + sl;
   const unseen = useStore((s) => s.displaysUnseen);
   const pending = cards.filter((c) => c.kind === "confirm" && (c.status ?? "pending") === "pending");
+  // New cards are added at the top: bring the list back to the top so the new one is in view.
+  const displaysRef = useRef<HTMLDivElement>(null);
+  const newest = cards[0]?.id;
+  useEffect(() => {
+    if (tab === "displays" && newest) displaysRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }, [newest, tab]);
   return (
     <>
       <div className="panel-label right-label tabs">
@@ -350,7 +440,7 @@ function RightPanel() {
           <Briefing />
         </div>
       ) : (
-        <div className="cards">
+        <div className="cards" ref={displaysRef}>
           <AnimatePresence initial={false}>
             {cards.map((c, i) => <HoloCard key={c.id} card={c} index={i} />)}
           </AnimatePresence>

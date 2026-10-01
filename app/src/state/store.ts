@@ -26,8 +26,16 @@ interface Store {
   tools: ToolEvent[];
   focusCardId: string | null;
   caption: string;
+  logOpen: boolean;
+  logUnseen: number;
   telemetry: Telemetry | null;
   sessionId: string;
+  /** Card shown full-size in the workbench overlay (files, codebases). */
+  expandedCardId: string | null;
+  /** Files uploaded but not yet sent with a message (chips above the composer). */
+  attachments: { id: string; filename: string; kind: string; size: number }[];
+  uploading: number;
+  dropActive: boolean;
   set: (p: Partial<Store>) => void;
   addMessage: (m: Message) => void;
   upsertJarvis: (turnId: string, text: string, final?: boolean, extra?: Partial<Message>) => void;
@@ -68,10 +76,16 @@ export const useStore = create<Store>((set, get) => ({
   tools: [],
   focusCardId: null,
   caption: "",
+  logOpen: localStorage.getItem("jarvis.logOpen") === "1",
+  logUnseen: 0,
   telemetry: null,
   sessionId: "",
+  expandedCardId: null,
+  attachments: [],
+  uploading: 0,
+  dropActive: false,
   set: (p) => set(p),
-  addMessage: (m) => set((s) => ({ messages: [...s.messages.slice(-80), m] })),
+  addMessage: (m) => set((s) => ({ messages: [...s.messages.slice(-80), m], logUnseen: s.logOpen ? 0 : s.logUnseen + 1 })),
   upsertJarvis: (turnId, text, final = false, extra = {}) =>
     set((s) => {
       const idx = s.messages.findIndex((m) => m.role === "jarvis" && m.turnId === turnId);
@@ -84,7 +98,7 @@ export const useStore = create<Store>((set, get) => ({
         at: idx >= 0 ? s.messages[idx].at : Date.now(),
         ...extra,
       };
-      if (idx < 0) return { messages: [...s.messages.slice(-80), msg] };
+      if (idx < 0) return { messages: [...s.messages.slice(-80), msg], logUnseen: s.logOpen ? 0 : s.logUnseen + 1 };
       const copy = s.messages.slice();
       copy[idx] = msg;
       return { messages: copy };
@@ -113,7 +127,8 @@ export const useStore = create<Store>((set, get) => ({
     }),
   updateCard: (id, p) => set((s) => ({ cards: s.cards.map((c) => (c.id === id ? { ...c, ...p } : c)) })),
   removeCard: (id) =>
-    set((s) => ({ cards: s.cards.filter((c) => c.id !== id), focusCardId: s.focusCardId === id ? null : s.focusCardId })),
+    set((s) => ({ cards: s.cards.filter((c) => c.id !== id), focusCardId: s.focusCardId === id ? null : s.focusCardId,
+      expandedCardId: s.expandedCardId === id ? null : s.expandedCardId })),
   addTool: (t) =>
     set((s) => {
       if (t.status !== "start") {

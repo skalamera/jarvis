@@ -1,4 +1,4 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, Menu, nativeImage, shell, systemPreferences, Tray } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, session, shell, systemPreferences, Tray } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
@@ -182,6 +182,11 @@ app.whenReady().then(async () => {
     httpUrl: `http://127.0.0.1:${CORE_PORT}`,
     token: externalCore ? process.env.JARVIS_TOKEN || "" : TOKEN,
   }));
+  ipcMain.handle("jarvis:pickFolder", async () => {
+    const r = await dialog.showOpenDialog({ title: "Open a project for JARVIS", properties: ["openDirectory"],
+      defaultPath: path.join(app.getPath("home"), "Documents", "Projects") });
+    return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
+  });
   ipcMain.on("jarvis:open", (_e, url: string) => {
     if (/^https?:\/\//.test(url) || /^tel:\+?[\d()\-. ]{3,20}$/.test(url) || /^slack:\/\/channel\?[\w=&%.-]+$/.test(url)) shell.openExternal(url);
   });
@@ -189,6 +194,15 @@ app.whenReady().then(async () => {
     const dockImg = nativeImage.createFromPath(path.join(ASSETS, "icon.png"));
     if (!dockImg.isEmpty()) app.dock.setIcon(dockImg); // dev runs show the JARVIS icon in the Dock too
   }
+  // The HUD loads from file://, so YouTube's embedded player gets no Referer and refuses to play (error 153).
+  // Give YouTube embed requests a stable app Referer (only those hosts; nothing else is touched).
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ["https://www.youtube-nocookie.com/*", "https://www.youtube.com/*"] },
+    (details, cb) => {
+      details.requestHeaders["Referer"] = "https://jarvis.local/";
+      cb({ requestHeaders: details.requestHeaders });
+    },
+  );
   await startCore();
   createWindow();
   buildTray();

@@ -17,10 +17,12 @@ from .briefing import briefing
 from .config import settings
 from .hermes_client import HermesClient, HermesError
 from .persona import build_instructions
+from .quick import quick_answer
 from .voice import Voice, b64
 
 log = logging.getLogger("jarvis.session")
 Send = Callable[[dict], Awaitable[None]]
+HEALTH_CHECK_INTERVAL_S = 10
 
 _CONFIRM = re.compile(r"^(?:(?:yes|yeah|yep|ok|okay)[, ]*)?(?:jarvis[, ]*)?(confirm(?:ed)?|authori[sz]e(?:d)?|send it|"
                       r"do it|go ahead|proceed|approved?|yes,? send(?: it)?|send)(?:[, ]*(?:jarvis|please|now))*[.!]?$", re.I)
@@ -62,6 +64,9 @@ class Session:
         self._state = "idle"
         self._closed = False
         self._feed_pos = store.feed_head()
+        self._health_task: asyncio.Task | None = None
+        self.attachments: list[dict] = []  # files uploaded since the last turn, handed to the next one
+        self.focus: dict | None = None      # the file / project currently on screen (the conversation's subject)
 
     # ------------------------------------------------------------------ io
     async def send(self, msg: dict) -> None:
@@ -78,14 +83,36 @@ class Session:
             await self.send({"type": "state", "state": s})
 
     async def hello(self) -> None:
+        h = await self.hermes.health()
+        v = await self.voice.health()
         await self.send({"type": "hello", "session_id": self.session_id, "accounts": gtools.accounts_list(),
-                         "hermes": await self.hermes.health(), "voice": await self.voice.health(),
+                         "hermes": h, "voice": v,
                          "speak": self.speak, "voice_name": self.voice.voice})
         for a in store.pending_actions():
             await self._show_action(a)
+        if self._health_task is None or self._health_task.done():
+            self._health_task = asyncio.create_task(self._health_loop(h, v))
+
+    async def _health_loop(self, last_h: bool, last_v: bool) -> None:
+        while not self._closed:
+            await asyncio.sleep(HEALTH_CHECK_INTERVAL_S)
+            if self._closed:
+                break
+            try:
+                h = await self.hermes.health()
+                v = await self.voice.health()
+                if h != last_h or v != last_v:
+                    last_h, last_v = h, v
+                    await self.send({"type": "health", "hermes": h, "voice": v})
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                pass
 
     async def close(self) -> None:
         self._closed = True
+        if self._health_task and not self._health_task.done():
+            self._health_task.cancel()
         await self.cancel_turn()
 
     # ------------------------------------------------------------------ inbound
@@ -164,10 +191,41 @@ class Session:
             return
         if _RESET.match(text):
             await self.reset()
-            await self.say_line("Fresh session, sir.")
+            await self.say_line("A clean slate, sir.")
+            return
+        quick = quick_answer(text, settings.timezone)
+        if quick:  # time/date: answer locally, no model round trip
+            await self.cancel_turn()
+            await self.state("thinking")
+            await self.say_line(quick)
             return
         await self.cancel_turn()  # barge-in
-        self.turn_task = asyncio.create_task(self._turn(text))
+        self.turn_task = asyncio.create_task(self._turn(self._with_context(text)))
+
+    # ------------------------------------------------------------------ files & projects in the conversation
+    def attach(self, items: list[dict]) -> None:
+        for it in items:
+            if it.get("id") and all(a["id"] != it["id"] for a in self.attachments):
+                self.attachments.append(it)
+        if items:
+            self.focus = {"type": "file", **items[-1]}
+
+    def set_focus(self, focus: dict | None) -> None:
+        self.focus = focus
+
+    def _with_context(self, text: str) -> str:
+        """Prefix the model input with what he just attached / what's on screen, so "fix this", "what's in
+        it", "add a column" resolve without him naming ids. The HUD shows only his words."""
+        lines = []
+        if self.attachments:
+            lines.append("[Stephen attached: " + "; ".join(
+                f"{a.get('filename')} (artifact_id={a['id']}, kind={a.get('kind')})" for a in self.attachments) + "]")
+            self.attachments = []
+        elif self.focus and self.focus.get("type") == "file":
+            lines.append(f"[On screen: file {self.focus.get('filename')} (artifact_id={self.focus.get('id')})]")
+        if self.focus and self.focus.get("type") == "project":
+            lines.append(f"[Active project: {self.focus.get('name')} at {self.focus.get('root')}]")
+        return ("\n".join(lines) + "\n" + text) if lines else text
 
     # ------------------------------------------------------------------ turn
     async def cancel_turn(self) -> None:
@@ -272,6 +330,12 @@ class Session:
     async def _flush_feed(self, turn_id: str) -> None:
         for item in store.feed_since(self._feed_pos):
             self._feed_pos = item["seq"]
+            res = item.get("result") if isinstance(item.get("result"), dict) else {}
+            if item["tool"] in ("code_map", "code_annotate", "code_change") and res.get("root"):
+                self.focus = {"type": "project", "root": res["root"], "name": res.get("name")}
+            elif res.get("artifact"):
+                a = res["artifact"]
+                self.focus = {"type": "file", "id": a["id"], "filename": a["filename"], "kind": a["kind"]}
             for c in V.cards_from_feed(item):
                 await self.send({"type": "card", "turn_id": turn_id, "card": c})
         for a in store.pending_actions():
@@ -365,12 +429,21 @@ class Session:
         self._tts_q, self._tts_task = None, None
 
     async def _tts_worker(self, turn_id: str, q: asyncio.Queue) -> None:
+        """Synthesize sentences in order, one request in flight (VoiceStudio serializes anyway), and send each
+        clip the moment it's ready so the HUD always has the next sentence queued before the current ends."""
         seq = 0
         spoke = False
         while True:
             sentence = await q.get()
             if sentence is None:
                 break
+            # merge sentences that are already waiting (up to a sensible size): one request, natural prosody
+            while not q.empty() and len(sentence) < 220:
+                nxt = q.get_nowait()
+                if nxt is None:
+                    q.put_nowait(None)
+                    break
+                sentence = f"{sentence} {nxt}"
             try:
                 audio = await self.voice.tts(sentence)
             except Exception as e:

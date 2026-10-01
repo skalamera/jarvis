@@ -58,3 +58,36 @@ def test_confirmation_grammar():
         assert classify_confirmation(t) == "cancel", t
     for t in ("send an email to Bob about lunch", "what's on my calendar", "confirm my meeting with Dana tomorrow at 3pm please"):
         assert classify_confirmation(t) is None, t
+
+
+async def test_session_health_loop_emits_change(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    from jarvis_core import session as S
+
+    monkeypatch.setattr(S, "HEALTH_CHECK_INTERVAL_S", 0.01)
+
+    send = AsyncMock()
+    hermes = MagicMock()
+    hermes.health = AsyncMock(side_effect=[False, True, True])
+    voice = MagicMock()
+    voice.health = AsyncMock(return_value=True)
+    voice.voice = "bm_lewis"
+
+    sess = S.Session(send, hermes, voice)
+    await sess.hello()
+
+    # Wait briefly for _health_loop to detect that hermes became True
+    await asyncio.sleep(0.05)
+    await sess.close()
+
+    msgs = [c[0][0] for c in send.call_args_list]
+    types = [m.get("type") for m in msgs]
+    assert "hello" in types
+    hello_m = next(m for m in msgs if m["type"] == "hello")
+    assert hello_m["hermes"] is False
+    assert hello_m["voice"] is True
+
+    health_m = next((m for m in msgs if m["type"] == "health"), None)
+    assert health_m is not None
+    assert health_m == {"type": "health", "hermes": True, "voice": True}

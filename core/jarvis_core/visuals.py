@@ -120,12 +120,36 @@ def cards_from_feed(item: dict) -> list[dict]:
         if r.get("indices") is not None:
             return [card("market", "Crypto overview", r)]
         return [card("crypto", f"{r.get('name', '')} · {r.get('symbol', '')}", r)]
+    if tool == "music_play":
+        return [card("music", r.get("title", "Music"), r)]
+    if tool == "youtube_video":
+        first = (r.get("results") or [{}])[0]
+        return [card("video", first.get("title") or r.get("query", "YouTube"), r)]
+    if tool == "media_control":
+        return [card("media_control", "", r)]
+    if tool == "sports_game":
+        return [card("sports_game", f"{r.get('league_label', '')} · " + " vs ".join(t.get("abbr", "") for t in r.get("teams", [])), r)]
+    if tool == "sports_scoreboard":
+        return [card("sports_scoreboard", f"{r.get('league_label', '')} scoreboard" + (f" · {r['date']}" if r.get("date") else ""), r)]
     if tool == "weather":
         loc = r.get("location") or {}
         place = ", ".join(x for x in (loc.get("name"), loc.get("region") if loc.get("country") == "US"
                                       else loc.get("country")) if x)
         return [card("weather", place or "Weather", r)]
+    if tool in ARTIFACT_TOOLS and r.get("artifact"):
+        a = r["artifact"]
+        return [card("artifact", f"{a['filename']} · v{a['version']}", r)]
+    if tool in ("code_map", "code_annotate") and r.get("modules") is not None:
+        return [card("codebase", f"{r.get('name', 'Project')} · {r.get('total_files', 0)} files", r)]
+    if tool == "code_read" and r.get("file"):
+        return [card("code_file", r["file"], r)]
+    if tool == "code_change" and r.get("changes") is not None:
+        return [card("code_changes", f"{r.get('name', '')} · changes", r)]
     return []
+
+
+ARTIFACT_TOOLS = {"file_open", "file_edit", "file_write", "sheet_edit", "image_edit", "file_create", "file_revert",
+                  "file_upload"}
 
 
 def action_card(action: dict) -> dict:
@@ -214,7 +238,7 @@ class SentenceStream:
     """Feed streaming text; yields TTS-sized chunks as complete sentences become available.
     The very first chunk is kept short so audio starts fast; later chunks synthesize during playback."""
 
-    def __init__(self, max_spoken_chars: int = 700, first_max: int = 70, next_max: int = 170):
+    def __init__(self, max_spoken_chars: int = 700, first_max: int = 140, next_max: int = 320):
         self.emitted = 0
         self.spoken_chars = 0
         self.max = max_spoken_chars

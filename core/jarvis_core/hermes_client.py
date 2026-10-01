@@ -12,9 +12,9 @@ class HermesError(RuntimeError):
 
 
 class HermesClient:
-    def __init__(self, base_url: str, api_key: str, model: str = "", provider: str = ""):
+    def __init__(self, base_url: str, api_key: str, model: str = "", provider: str = "", reasoning: str = ""):
         self.base = base_url.rstrip("/")
-        self.model, self.provider = model, provider
+        self.model, self.provider, self.reasoning = model, provider, reasoning
         self._http = httpx.AsyncClient(
             base_url=self.base, headers={"Authorization": f"Bearer {api_key}"},
             timeout=httpx.Timeout(30.0, read=None))
@@ -35,6 +35,8 @@ class HermesClient:
             body["model"] = self.model
         if self.provider:
             body["provider"] = self.provider
+        if self.reasoning:
+            body["model_options"] = {"reasoning_effort": self.reasoning}
         try:
             r = await self._http.post("/v1/runs", json=body)
         except httpx.HTTPError as e:

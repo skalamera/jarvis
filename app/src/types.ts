@@ -100,6 +100,8 @@ declare global {
       config: () => Promise<{ coreUrl: string; httpUrl: string; token: string }>;
       onListen: (cb: () => void) => () => void;
       open: (url: string) => void;
+      pathForFile?: (f: File) => string;
+      pickFolder?: () => Promise<string | null>;
     };
   }
 }

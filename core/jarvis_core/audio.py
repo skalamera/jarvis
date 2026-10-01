@@ -89,6 +89,8 @@ class MicPipeline:
         self.suspended = False  # while JARVIS is speaking without headphones
         self._level_t = 0.0
         self._cooldown_until = 0.0
+        self._via = "wake"
+        self._max_initial_silence = 6.0
 
     # ------------------------------------------------------------------ control
     async def set_listening(self, enabled: bool) -> None:
@@ -99,13 +101,27 @@ class MicPipeline:
                              "wake_error": self.wake.error})
 
     async def ptt_start(self) -> None:
+        self._via = "ptt"
         self._begin("ptt")
         await self.on_event({"type": "listening", "via": "ptt"})
 
     async def listen_now(self) -> None:
         """Hotkey / mic-button tap: capture one utterance, end-pointed by silence (like after a wake word)."""
+        self._via = "hotkey"
+        self._max_initial_silence = 6.0
         self._begin("capture")
         self.rec = []
+
+    async def listen_follow_up(self, timeout_s: float = 4.0) -> None:
+        """After JARVIS finishes speaking, listen briefly for a user response without requiring wake word."""
+        if not self.wake_enabled or not self.wake.available or self.mode != "wake":
+            return
+        self.pre.clear()
+        self._via = "follow_up"
+        self._max_initial_silence = timeout_s
+        self._begin("capture")
+        self.rec = []
+        await self.on_event({"type": "listening", "via": "follow_up"})
 
     async def ptt_end(self) -> None:
         if self.mode == "ptt":
@@ -114,6 +130,8 @@ class MicPipeline:
     async def cancel(self) -> None:
         self.rec = []
         self.mode = "wake" if self.wake_enabled and self.wake.available else "off"
+        self._via = "wake"
+        self._max_initial_silence = 6.0
 
     def _begin(self, mode: str) -> None:
         self.mode = mode
@@ -149,6 +167,8 @@ class MicPipeline:
             if s >= self.wake.threshold:
                 self.wake.reset()
                 self._cooldown_until = now + 1.5
+                self._via = "wake"
+                self._max_initial_silence = 6.0
                 self._begin("capture")
                 self.rec = []  # drop the wake phrase itself
                 await self.on_event({"type": "wake", "score": round(s, 3)})
@@ -165,9 +185,11 @@ class MicPipeline:
             else:
                 self.silence_frames += 1
             if self.mode == "capture":
-                # 0.8s of trailing silence after speech ends the utterance; give up after 6s of nothing
-                if (self.heard_speech and self.silence_frames >= 10) or (not self.heard_speech and dur > 6) or dur > 30:
-                    await self._finish("wake")
+                # 0.8s of trailing silence after speech ends the utterance; give up after max_initial_silence of nothing
+                max_silence = getattr(self, "_max_initial_silence", 6.0)
+                via = getattr(self, "_via", "wake")
+                if (self.heard_speech and self.silence_frames >= 10) or (not self.heard_speech and dur > max_silence) or dur > 30:
+                    await self._finish(via)
             elif dur > 60:
                 await self._finish("ptt")
 
@@ -177,6 +199,8 @@ class MicPipeline:
         self.mode = "wake" if self.wake_enabled and self.wake.available else "off"
         self.wake.reset()
         self._cooldown_until = time.monotonic() + 1.0
+        self._via = "wake"
+        self._max_initial_silence = 6.0
         if not frames or not heard:
             await self.on_event({"type": "listening_end", "via": via, "empty": True})
             return

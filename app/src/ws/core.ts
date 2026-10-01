@@ -1,6 +1,7 @@
 /** Single connection to JARVIS Core. Routes protocol events into the store + audio engine. */
 import { useStore } from "../state/store";
 import { Microphone, Speaker } from "../voice/audio";
+import { media } from "../media/bus";
 import type { Card } from "../types";
 
 const TRASH_KINDS = new Set(["gmail_trash", "gmail_delete_permanently"]);
@@ -30,6 +31,7 @@ class CoreLink {
     this.speaker.onStart = (text) => useStore.getState().set({ caption: text });
     this.speaker.onPlaying = (playing) => {
       this.send({ type: "speaking_audio", playing });
+      media.duck("speaking", playing); // lower the music/video while JARVIS talks
       if (!playing) useStore.getState().set({ caption: "" });
     };
     this.speaker.onIdle = () => this.send({ type: "playback_done" });
@@ -123,8 +125,16 @@ class CoreLink {
       case "hello":
         s.set({ sessionId: m.session_id, accounts: m.accounts ?? [], hermesOk: !!m.hermes, voiceOk: !!m.voice, speak: m.speak });
         break;
+      case "health":
+      case "pong":
+        s.set({
+          ...(m.hermes !== undefined ? { hermesOk: !!m.hermes } : {}),
+          ...(m.voice !== undefined ? { voiceOk: !!m.voice } : {}),
+        });
+        break;
       case "state":
         s.set({ hud: m.state });
+        media.duck("listening", m.state === "listening");
         break;
       case "mic":
         s.set({ micMode: m.mode, wakeAvailable: !!m.wake_available });
@@ -176,6 +186,23 @@ class CoreLink {
         break;
       case "card": {
         const c = this.card(m.card, m.turn_id);
+        if (c.kind === "media_control") {
+          // A voice command for the player, not a display.
+          if (!media.control(c.data?.action, c.data?.level)) s.toast({ text: "Nothing is playing.", error: true });
+          break;
+        }
+        if (c.kind === "music" || c.kind === "video") {
+          // One player of each kind: a new song/video replaces the old card instead of stacking players.
+          for (const x of useStore.getState().cards.filter((x) => x.kind === c.kind)) s.removeCard(x.id);
+        }
+        const key = c.data?.key;
+        const same = key ? useStore.getState().cards.find((x) => x.data?.key === key) : undefined;
+        if (same) {
+          // The same file / project re-rendered after an edit: refresh that display in place, don't stack copies.
+          s.set({ cards: useStore.getState().cards.map((x) => (x.id === same.id ? { ...c, id: same.id } : x)),
+            focusCardId: same.id, rightTab: "displays" });
+          break;
+        }
         s.addCard(c);
         if (c.kind === "draft" && c.turnId) {
           // The draft is the answer: fold away the lookups this same turn made to write it
@@ -239,6 +266,7 @@ class CoreLink {
         useStore.getState().toast({ text: m.text, error: !!m.error });
         break;
       case "rpc_result":
+      case "workspace_result":
       case "pylon_result": {
         const w = this.pylonWait.get(m.req);
         if (w) { this.pylonWait.delete(m.req); w(m); }
@@ -262,6 +290,57 @@ class CoreLink {
     await this.speaker?.unlock();
     this.speaker?.stop();
     this.send({ type: "user_text", text, source: "text" });
+    useStore.getState().set({ attachments: [] });
+  }
+
+  /** Upload files dropped / picked / pasted in the HUD. Core keeps sandboxed copies and shows a display for each;
+   *  the next message (typed or spoken) is about them. */
+  async upload(files: File[]): Promise<void> {
+    if (!this.cfg || !files.length) return;
+    const s = useStore.getState();
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f, f.name || "pasted.png");
+    s.set({ uploading: files.length });
+    try {
+      const r = await fetch(`${this.cfg.httpUrl}/upload?token=${encodeURIComponent(this.cfg.token)}`, { method: "POST", body: fd });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.statusText);
+      for (const e of j.errors ?? []) s.toast({ text: e, error: true });
+      if (j.files?.length) {
+        this.send({ type: "attach", files: j.files });
+        useStore.getState().set({ attachments: [...useStore.getState().attachments, ...j.files], rightTab: "displays" });
+      }
+    } catch (e) {
+      s.toast({ text: `Upload failed: ${e instanceof Error ? e.message : e}`, error: true });
+    } finally {
+      useStore.getState().set({ uploading: 0 });
+    }
+  }
+
+  /** Map a local project folder (dropped or picked) and make it the conversation's active project. */
+  async openFolder(path: string): Promise<void> {
+    const r = await this.workspace("code_open_folder", { path });
+    if (!r.ok) useStore.getState().toast({ text: r.error || "Couldn't open that folder.", error: true });
+  }
+
+  /** Tell Core which file / project is on screen, so "this" in the next message refers to it. */
+  focus(f: Record<string, unknown> | null): void {
+    this.send({ type: "focus", focus: f });
+  }
+
+  /** Click-only file / code card op (allow-listed in Core; every write is versioned and undoable). */
+  workspace(op: string, args: Record<string, unknown>): Promise<{ ok: boolean; result?: any; error?: string }> {
+    const req = `w${++this.pylonSeq}`;
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => { this.pylonWait.delete(req); resolve({ ok: false, error: "Timed out waiting for Core." }); }, 120_000);
+      this.pylonWait.set(req, (m) => { window.clearTimeout(timer); resolve(m); });
+      this.send({ type: "workspace", op, args, req });
+    });
+  }
+
+  artifactUrl(id: string, version: number): string {
+    if (!this.cfg) return "";
+    return `${this.cfg.httpUrl}/artifact/${id}/raw?v=${version}&token=${encodeURIComponent(this.cfg.token)}`;
   }
   async listenNow(): Promise<void> {
     await this.speaker?.unlock();
@@ -330,6 +409,11 @@ class CoreLink {
   /** Click on a place row: Core fetches the full Google card and pushes it through the feed. */
   openPlace(placeId: string): void {
     this.send({ type: "place_open", place_id: placeId });
+  }
+
+  /** Click on a game in a scoreboard card: Core builds the full game card and pushes it. */
+  openGame(league: string, eventId: string): void {
+    this.send({ type: "game_open", league, event_id: eventId });
   }
 
   /** Click on a ticker anywhere in a market card: Core builds the full stock / crypto card and pushes it. */

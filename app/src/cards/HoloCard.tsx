@@ -10,6 +10,10 @@ import { PlaceCard, PlacesList } from "./PlaceCards";
 import { DirectionsCard } from "./DirectionsCard";
 import { CryptoCard, MarketCard, StockCard, StockCompareCard } from "./MarketCards";
 import { SlackCard } from "./SlackCards";
+import { MusicCard, VideoCard } from "./MediaCards";
+import { GameCard, ScoreboardCard } from "./SportsCards";
+import { ArtifactCard, CodebaseCard, CodeChangesCard, CodeFileCard } from "./WorkspaceCards";
+import { core } from "../ws/core";
 
 const BODY: Record<string, (p: { card: Card }) => React.ReactElement> = {
   email_list: EmailList,
@@ -40,12 +44,20 @@ const BODY: Record<string, (p: { card: Card }) => React.ReactElement> = {
   market: MarketCard,
   slack: SlackCard,
   crypto: CryptoCard,
+  sports_game: GameCard,
+  sports_scoreboard: ScoreboardCard,
+  music: MusicCard,
+  video: VideoCard,
+  artifact: ArtifactCard,
+  codebase: CodebaseCard,
+  code_file: CodeFileCard,
+  code_changes: CodeChangesCard,
 };
 
 const KIND_LABEL: Record<string, string> = {
   email_list: "MAIL", email: "MESSAGE", thread: "THREAD", draft: "DRAFT", confirm: "AUTHORIZE", calendar: "CALENDAR",
   files: "DRIVE", document: "DOCUMENT", notice: "STATUS", "visual.chart": "ANALYSIS", "visual.stats": "TELEMETRY",
-  "visual.table": "DATA", "visual.list": "INDEX", "visual.image": "IMAGE", "visual.link": "LINK", "visual.markdown": "BRIEF", "visual.map": "NAVIGATION", weather: "WEATHER", pylon_list: "PYLON", pylon_ticket: "TICKET", places: "PLACES", place: "PLACE", directions: "ROUTE", stock: "MARKETS", stock_compare: "COMPARE", market: "MARKETS", crypto: "CRYPTO", slack: "SLACK",
+  "visual.table": "DATA", "visual.list": "INDEX", "visual.image": "IMAGE", "visual.link": "LINK", "visual.markdown": "BRIEF", "visual.map": "NAVIGATION", weather: "WEATHER", pylon_list: "PYLON", pylon_ticket: "TICKET", places: "PLACES", place: "PLACE", directions: "ROUTE", stock: "MARKETS", stock_compare: "COMPARE", market: "MARKETS", crypto: "CRYPTO", slack: "SLACK", sports_game: "SPORTS", sports_scoreboard: "SCORES", music: "MUSIC", video: "VIDEO", artifact: "FILE", codebase: "CODEBASE", code_file: "SOURCE", code_changes: "CHANGES",
 };
 
 export function HoloCard({ card, index }: { card: Card; index: number }) {
@@ -64,7 +76,11 @@ export function HoloCard({ card, index }: { card: Card; index: number }) {
       exit={{ opacity: 0, x: 30, scale: 0.97, filter: "blur(6px)", transition: { duration: 0.2 } }}
       transition={{ type: "spring", stiffness: 260, damping: 28, delay: Math.min(index, 3) * 0.05 }}
       className={`holo ${confirm ? "holo-amber" : ""} ${focus === card.id ? "holo-focus" : ""} kind-${card.kind.replace(".", "-")}`}
-      onClick={() => setStore({ focusCardId: card.id })}
+      onClick={() => {
+        setStore({ focusCardId: card.id });
+        const a = card.data?.artifact;
+        if (a) core.focus({ type: "file", id: a.id, filename: a.filename, kind: a.kind });  // "this" = the file he clicked
+      }}
     >
       <span className="corner tl" /><span className="corner tr" /><span className="corner bl" /><span className="corner br" />
       <header className="holo-head">

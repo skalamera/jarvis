@@ -86,3 +86,34 @@ async def test_suspended_blocks_wake(rig):
     wake.fire_at = 2
     await mic.feed(silence(FRAME * 4 / 16000))
     assert not any(e["type"] == "wake" for e in events)
+
+
+async def test_follow_up_captures_speech_without_wake_word(rig):
+    mic, wake, events, utts = rig
+    await mic.set_listening(True)
+    await mic.listen_follow_up(timeout_s=4.0)
+    assert any(e["type"] == "listening" and e.get("via") == "follow_up" for e in events)
+    await mic.feed(tone(1.0))
+    await mic.feed(silence(1.2))
+    await asyncio.sleep(0.01)
+    assert utts and utts[0][1] == "follow_up"
+    assert 0.9 * 16000 * 2 < utts[0][0] < 2.4 * 16000 * 2
+    assert mic.mode == "wake"
+
+
+async def test_follow_up_times_out_empty_when_no_speech(rig):
+    mic, wake, events, utts = rig
+    await mic.set_listening(True)
+    await mic.listen_follow_up(timeout_s=1.0)
+    await mic.feed(silence(1.2))
+    assert not utts
+    assert any(e["type"] == "listening_end" and e["empty"] and e.get("via") == "follow_up" for e in events)
+    assert mic.mode == "wake"
+
+
+async def test_follow_up_ignored_if_mic_disabled(rig):
+    mic, wake, events, utts = rig
+    await mic.set_listening(False)
+    await mic.listen_follow_up(timeout_s=1.0)
+    assert mic.mode == "off"
+    assert not any(e.get("via") == "follow_up" for e in events)

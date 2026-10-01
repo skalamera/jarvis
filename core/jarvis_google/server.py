@@ -19,6 +19,8 @@ from . import places as PL
 from . import routes as RT
 from . import markets as MK
 from . import pylon as P
+from . import artifacts as AR
+from . import code as CODE
 from . import store
 from . import tools as T
 from .accounts import AccountError
@@ -276,6 +278,57 @@ def _brief(tool: str, fn, **kw) -> str:
         return json.dumps({"error": f"{type(e).__name__}: {e}"})
 
 
+# ------------------------------------------------------------------ media (YouTube Music / YouTube, read-only)
+@mcp.tool()
+def music_play(query: str, kind: str = "") -> str:
+    """Play music from YouTube Music in the HUD's music player (starts playing immediately). query = song, artist,
+    album, playlist or mood ("Bohemian Rhapsody", "Kind of Blue", "lofi hip hop", "80s rock"). kind: "song"
+    (default: that song, then a radio of similar songs), "album", "playlist" (moods/genres/"focus music"), "artist"
+    (their top songs). Renders a music card with album art, controls and the up-next queue."""
+    from . import media as MD
+    try:
+        return json.dumps(MD.brief("music_play", MD.music_play(query, kind)), default=str)
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
+@mcp.tool()
+def youtube_video(query: str = "", video_id: str = "") -> str:
+    """Play a regular YouTube video in the HUD's video player (starts playing). query = what to watch ("how to
+    make sourdough", "SpaceX launch", "Veritasium latest") or a YouTube URL; video_id = an 11-char id from an
+    earlier result. Renders a video card with the player and the other search results to pick from."""
+    from . import media as MD
+    try:
+        return json.dumps(MD.brief("youtube_video", MD.youtube_video(query, video_id)), default=str)
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
+@mcp.tool()
+def media_control(action: str, level: int = -1) -> str:
+    """Control what's playing in the HUD (music or video): pause, resume, next, previous, stop, volume_up,
+    volume_down, set_volume (level 0-100), mute, unmute."""
+    from . import media as MD
+    return json.dumps(MD.media_control(action, None if level < 0 else level))
+
+
+# ------------------------------------------------------------------ sports (ESPN, read-only)
+@mcp.tool()
+def sports_game(league: str = "", team: str = "", date: str = "", when: str = "", game_id: str = "") -> str:
+    """Sports scores and games (live ESPN data): NFL, NBA, MLB, NHL, WNBA, college football/basketball, MLS,
+    Premier League, La Liga, Champions League. Give a team ("Bears", "Man City") and/or a league ("nfl"), and
+    optionally a date ("2026-09-28", "yesterday", "monday", "last night") or when="next" for the upcoming game.
+    One game -> full game card: score by period, team box score, player stats, leaders, scoring plays,
+    win-probability chart, playable highlight clips, recap and related articles. Several games (league + date,
+    no team) -> scoreboard card. Live games show live score. The HUD renders the visuals automatically."""
+    from . import sports as SP
+    try:
+        return json.dumps(SP.brief(SP.sports_game(league=league, team=team, date=date, when=when, game_id=game_id)),
+                          default=str)
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
 # ------------------------------------------------------------------ Slack (read-only)
 @mcp.tool()
 def slack_updates() -> str:
@@ -341,6 +394,123 @@ def contacts_search(account: str, query: str, max_results: int = 10) -> str:
 
 def main() -> None:
     mcp.run()
+
+
+# ------------------------------------------------------------------ files Stephen uploaded to the HUD
+# Uploads are sandboxed copies: every write makes a new version (undo restores the previous one). Saving a copy
+# back out (to Downloads) is a click on the card, never a tool.
+@mcp.tool()
+def file_list(limit: int = 20) -> str:
+    """Files Stephen has uploaded to the HUD (newest first) with their artifact ids."""
+    return _safe(AR.file_list, limit=limit)
+
+
+@mcp.tool()
+def file_open(artifact_id: str) -> str:
+    """Show an uploaded file in its interactive HUD display and get a compact summary (sheet headers + numeric
+    column stats, document excerpt, image size + path). Images: then call vision_analyze on the returned path."""
+    return _safe(AR.file_open, artifact_id=artifact_id)
+
+
+@mcp.tool()
+def file_read(artifact_id: str, offset: int = 0, limit: int = 20000) -> str:
+    """Full text of an uploaded file in chunks (spreadsheets as CSV per sheet, PDF / Word as extracted text).
+    Follow next_offset for long files. Does not render anything."""
+    return _safe(AR.file_read, artifact_id=artifact_id, offset=offset, limit=limit)
+
+
+@mcp.tool()
+def file_edit(artifact_id: str, old: str, new: str, replace_all: bool = False, note: str = "") -> str:
+    """Replace exact text in an uploaded text / code / CSV file (old must match exactly; file_read first).
+    Saves a new version and refreshes the display; Stephen can undo it."""
+    return _safe(AR.file_edit, artifact_id=artifact_id, old=old, new=new, replace_all=replace_all, note=note)
+
+
+@mcp.tool()
+def file_write(artifact_id: str, content: str, note: str = "") -> str:
+    """Replace the whole content of an uploaded text / code / CSV file. Saves a new version (undoable)."""
+    return _safe(AR.file_write, artifact_id=artifact_id, content=content, note=note)
+
+
+@mcp.tool()
+def sheet_edit(artifact_id: str, edits: list[dict] | None = None, sheet: str = "", append_rows: list[list] | None = None,
+               delete_rows: list[int] | None = None, note: str = "") -> str:
+    """Change cells in an uploaded spreadsheet (.csv / .xlsx). edits: [{"cell": "B3", "value": "42"}] (A1 style;
+    values starting with "=" are Excel formulas) or [{"row": 2, "col": 1, "value": ...}] (0-based, row 0 = header).
+    append_rows: [[...], ...]; delete_rows: 0-based grid rows. sheet: xlsx sheet name (default: first).
+    Saves a new version (undoable) and refreshes the grid on screen."""
+    return _safe(AR.sheet_edit, artifact_id=artifact_id, edits=edits, sheet=sheet, append_rows=append_rows,
+                 delete_rows=delete_rows, note=note)
+
+
+@mcp.tool()
+def image_edit(artifact_id: str, ops: list[dict], note: str = "") -> str:
+    """Edit an uploaded image; ops applied in order: {"op":"rotate","degrees":90} (clockwise), {"op":"flip",
+    "direction":"horizontal|vertical"}, {"op":"crop","left":0.1,"top":0,"right":0.9,"bottom":1} (fractions or px),
+    {"op":"resize","width":800}, {"op":"brightness|contrast|saturation","factor":1.3}, {"op":"grayscale"},
+    {"op":"invert"}, {"op":"sharpen"}, {"op":"blur","radius":2}, {"op":"annotate","text":"...","x":0.05,"y":0.05,
+    "color":"#ff3b30","size":32}. Saves a new version (undoable)."""
+    return _safe(AR.image_edit, artifact_id=artifact_id, ops=ops, note=note)
+
+
+@mcp.tool()
+def file_create(filename: str, content: str = "", rows: list[list] | None = None, note: str = "") -> str:
+    """Create a NEW file in the HUD workspace and show it: a report (.md), script, cleaned copy, or a spreadsheet
+    from `rows` (.xlsx or .csv). Use this for PDF / Word output too (write .md). Stephen saves it out with a click."""
+    return _safe(AR.file_create, filename=filename, content=content, rows=rows, note=note)
+
+
+@mcp.tool()
+def file_revert(artifact_id: str) -> str:
+    """Undo the last change to an uploaded file (restores the previous version as a new version)."""
+    return _safe(AR.file_revert, artifact_id=artifact_id)
+
+
+# ------------------------------------------------------------------ codebases (projects under ~/Documents/Projects)
+@mcp.tool()
+def code_projects() -> str:
+    """Stephen's local projects (folders under ~/Documents/Projects), most recently modified first."""
+    return _safe(CODE.code_projects)
+
+
+@mcp.tool()
+def code_map(path: str, refresh: bool = False) -> str:
+    """Map a codebase and render the interactive architecture display: modules, languages, lines of code,
+    module dependency graph (from real imports), entry points, most-imported files, key symbols, recent commits.
+    path = project name ("jarvis") or absolute folder. Returns a compact summary; then read key files with
+    code_read and call code_annotate once so the display explains itself."""
+    return _safe(CODE.code_map, path=path, refresh=refresh)
+
+
+@mcp.tool()
+def code_annotate(path: str, summary: str, modules: dict[str, str] | None = None,
+                  architecture: list[str] | None = None, how_to_run: str = "") -> str:
+    """Attach your plain-English explanation to the codebase display: summary (what the project does, 2-5
+    sentences), modules {module name exactly as in code_map: one line on what it does}, architecture (3-6 short
+    lines on how data flows), how_to_run. Saved, so the map stays annotated next time."""
+    return _safe(CODE.code_annotate, path=path, summary=summary, modules=modules, architecture=architecture,
+                 how_to_run=how_to_run)
+
+
+@mcp.tool()
+def code_read(path: str, file: str, offset: int = 0, limit: int = 24000, show: bool = False) -> str:
+    """Read a source file in a project (file relative to the project root). show=True also opens it in a code
+    viewer on screen (only when Stephen asks to see the file). Secrets (.env, keys) are refused."""
+    return _safe(CODE.code_read, path=path, file=file, offset=offset, limit=limit, show=show)
+
+
+@mcp.tool()
+def code_edit(path: str, file: str, old: str, new: str, replace_all: bool = False, note: str = "") -> str:
+    """Edit a source file: replace exact text `old` with `new` (code_read first; old must match exactly and be
+    unique unless replace_all). Writes to disk, shows the diff on screen with an Undo button. note = why."""
+    return _safe(CODE.code_edit, path=path, file=file, old=old, new=new, replace_all=replace_all, note=note)
+
+
+@mcp.tool()
+def code_write(path: str, file: str, content: str, note: str = "") -> str:
+    """Create a new source file or replace one entirely (prefer code_edit for changes to existing files).
+    Shows the diff on screen with an Undo button."""
+    return _safe(CODE.code_write, path=path, file=file, content=content, note=note)
 
 
 if __name__ == "__main__":
