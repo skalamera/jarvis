@@ -29,6 +29,7 @@ def support_available() -> bool:
 log = logging.getLogger("jarvis.session")
 Send = Callable[[dict], Awaitable[None]]
 HEALTH_CHECK_INTERVAL_S = 10
+MARKET_MONITOR_S = 180
 
 # "cancel" is deliberately NOT a confirm verb: as an answer to a confirm card it means "don't".
 _VERB = r"(?:delete|remove|book|send|trash|share|reserve|do|make|create|run|post|write)"
@@ -51,6 +52,7 @@ _ACTION_DONE = {
     "flight_book": "Booked, sir. The confirmation is on screen.", "hotel_book": "Your room is booked, sir.",
     "car_rental_book": "The car is reserved, sir.", "restaurant_book": "Your table is booked, sir.",
     "reservation_cancel": "Cancelled, sir.",
+    "trade_order": "Order sent to Kraken, sir. The fill is on screen.", "trade_cancel": "Order cancelled.",
 }
 
 
@@ -66,7 +68,7 @@ def classify_confirmation(text: str) -> str | None:
 
 
 # Tools whose displays may land after the turn ended (rendered in the background).
-BACKGROUND_TOOLS = {"video_generate", "booking"}
+BACKGROUND_TOOLS = {"video_generate", "booking", "trade_alert", "trade_order_placed", "trade_desk", "trade_orders"}
 
 class Session:
     def __init__(self, send: Send, hermes: HermesClient, voice: Voice):
@@ -157,6 +159,8 @@ class Session:
             self._health_task = asyncio.create_task(self._health_loop(h, v))
         if self._idle_feed_task is None or self._idle_feed_task.done():
             self._idle_feed_task = asyncio.create_task(self._idle_feed_loop())
+        if getattr(self, "_market_task", None) is None or self._market_task.done():
+            self._market_task = asyncio.create_task(self._market_monitor_loop())
 
     async def _idle_feed_loop(self) -> None:
         """Between turns, still show displays that land late (a generated video finishing in the background)."""
@@ -170,6 +174,28 @@ class Session:
                 break
             except Exception:
                 pass
+
+    async def _market_monitor_loop(self) -> None:
+        """Watch his Kraken holdings: price alerts, 5%+ daily moves, filled orders. Cards always; spoken only when idle
+        and awake (never interrupts a turn, a briefing or sleep)."""
+        from jarvis_google import trading
+        await asyncio.sleep(20)
+        while not self._closed:
+            try:
+                if trading.configured():
+                    fired = await asyncio.to_thread(trading.monitor_tick)
+                    if fired:
+                        for f in fired:
+                            self.notes.append(f"Market monitor: {f['text']}")
+                        if not self._busy() and not self.sleeping and self._state in ("idle", None):
+                            await self._flush_feed("background", only=BACKGROUND_TOOLS)
+                            await self.say_line("Sir, " + fired[0]["text"][0].lower() + fired[0]["text"][1:]
+                                                + (f" And {len(fired) - 1} more on screen." if len(fired) > 1 else ""))
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.warning("market monitor: %s", e)
+            await asyncio.sleep(MARKET_MONITOR_S)
 
     async def _health_loop(self, last_h: bool, last_v: bool) -> None:
         while not self._closed:
@@ -231,9 +257,37 @@ class Session:
     _DIRECT_EXEC = {"gmail_delete_draft", "gmail_modify", "gmail_trash_now", "gmail_restore"}
     # "Book" on an offer card: only PROPOSES (a confirm card he still has to authorize).
     _DIRECT_BOOK = {"flight_book", "hotel_book", "car_rental_book", "restaurant_book", "reservation_cancel"}
+    # Uber Eats display: browsing + editing the local cart (no money moves; ordering stays behind a confirm card).
+    _DIRECT_EATS = {"menu", "cart_add", "cart_remove", "search"}
+    # Trading desk: read / refresh, and order tickets that only PROPOSE (a confirm card he authorizes).
+    _DIRECT_TRADE = {"portfolio", "insights", "order", "cancel", "alert_set", "alert_remove", "open_orders"}
 
     async def _direct(self, msg: dict) -> None:
         op, args = msg.get("op", ""), dict(msg.get("args") or {})
+        if op.startswith("trade_") and op[6:] in self._DIRECT_TRADE:
+            from jarvis_google import trading
+            fn = getattr(trading, op[6:])
+            try:
+                result = await asyncio.to_thread(fn, **args)
+                await self.send({"type": "direct_result", "op": op, "ok": True,
+                                 "result": result if op != "trade_portfolio" else None})
+            except Exception as e:
+                await self.send({"type": "direct_result", "op": op, "ok": False, "error": f"{type(e).__name__}: {e}"})
+            if op == "trade_order":
+                self.notes.append(f"Stephen filled in the order ticket on the trading desk: {args}.")
+            await self._flush_feed("direct")
+            return
+        if op.startswith("eats_") and op[5:] in self._DIRECT_EATS:
+            from jarvis_google import eats
+            try:
+                result = await asyncio.to_thread(getattr(eats, op[5:]), **args)
+                await self.send({"type": "direct_result", "op": op, "ok": True, "result": result})
+            except Exception as e:
+                await self.send({"type": "direct_result", "op": op, "ok": False, "error": f"{type(e).__name__}: {e}"})
+            if op == "eats_cart_add":
+                self.notes.append(f"Stephen tapped Add on the Uber Eats menu: {args.get('item')}.")
+            await self._flush_feed("direct")
+            return
         if op not in self._DIRECT_READ | self._DIRECT_PROPOSE | self._DIRECT_EXEC | self._DIRECT_BOOK:
             await self.send({"type": "direct_result", "op": op, "ok": False, "error": "operation not allowed"})
             return

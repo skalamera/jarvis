@@ -7,11 +7,18 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useStore } from "../state/store";
 import { core } from "../ws/core";
 import { ArtifactCard, CodebaseCard, CodeChangesCard, CodeFileCard } from "../cards/WorkspaceCards";
+import { GarageCard } from "../cards/GarageCards";
+import { EatsMenuCard } from "../cards/EatsCards";
+import { TradeDeskCard, TradeInsightsCard } from "../cards/TradeCards";
 import { SupportBlueprintCard } from "../cards/SupportCards";
 
 const XL: Record<string, (p: { card: any; expanded?: boolean }) => React.ReactElement> = {
   artifact: ArtifactCard, codebase: CodebaseCard, code_file: CodeFileCard, code_changes: CodeChangesCard,
   support_blueprint: SupportBlueprintCard,
+  garage: GarageCard,
+  eats_menu: EatsMenuCard,
+  trade_desk: TradeDeskCard,
+  trade_insights: TradeInsightsCard as any,
 };
 
 export function Workbench() {
@@ -33,14 +40,14 @@ export function Workbench() {
             exit={{ opacity: 0, scale: 0.97, filter: "blur(6px)" }} transition={{ type: "spring", stiffness: 240, damping: 26 }} onClick={(e) => e.stopPropagation()}>
             <span className="corner tl" /><span className="corner tr" /><span className="corner bl" /><span className="corner br" />
             <header className="wb-head">
-              <span className="wb-kind">{card.kind === "artifact" ? "WORKBENCH" : card.kind === "codebase" ? "CODEBASE" : card.kind === "code_changes" ? "CHANGES" : card.kind === "support_blueprint" ? "BLUEPRINT" : "SOURCE"}</span>
+              <span className="wb-kind">{card.kind === "artifact" ? "WORKBENCH" : card.kind === "codebase" ? "CODEBASE" : card.kind === "code_changes" ? "CHANGES" : card.kind === "support_blueprint" ? "BLUEPRINT" : card.kind === "garage" ? "GARAGE" : card.kind === "eats_menu" ? "MENU" : card.kind === "trade_desk" ? "TRADING DESK" : card.kind === "trade_insights" ? "INTELLIGENCE" : "SOURCE"}</span>
               <span className="wb-title">{card.title}</span>
               <span className={`wb-state st-${hud}`}><i />{hud === "speaking" ? "JARVIS" : hud.toUpperCase()}</span>
               <button className="holo-x" onClick={() => useStore.getState().set({ expandedCardId: null })} title="Close (Esc)">×</button>
             </header>
             <div className="wb-body"><Body card={card} expanded /></div>
             <footer className="wb-foot">
-              <span className="wb-caption">{caption || (card.kind === "support_blueprint" ? "Ask about any part: “what does Hadrian do?”, “how is a feature request routed?”, “what's Draft-Reply Mode?”" : "Talk to JARVIS about this: “what stands out?”, “fix the totals row”, “refactor this function”…")}</span>
+              <span className="wb-caption">{caption || (card.kind === "support_blueprint" ? "Ask about any part: “what does Hadrian do?”, “how is a feature request routed?”, “what's Draft-Reply Mode?”" : card.kind === "trade_desk" || card.kind === "trade_insights" ? "Ask: “how's my portfolio?”, “should I trim MSTR?”, “buy $50 of Bitcoin”, “alert me if ETH drops below 2,500”" : card.kind === "eats_menu" ? "Tap + to add, or say it: “add an everything bagel with lox, toasted”, “what's good here?”, “order it”" : card.kind === "garage" ? "Ask about your CL600: “when is the oil due?”, “what fuse is the head unit?”, “plan a wheel upgrade”, or attach a photo of the problem" : "Talk to JARVIS about this: “what stands out?”, “fix the totals row”, “refactor this function”…")}</span>
               <WbInput />
             </footer>
           </motion.div>

@@ -14,6 +14,9 @@ import { MusicCard, VideoCard } from "./MediaCards";
 import { GameCard, ScoreboardCard } from "./SportsCards";
 import { SupportBlueprintCard } from "./SupportCards";
 import { CarListingsCard } from "./CarCards";
+import { GarageCard, GarageDiagnosisCard, GaragePlanCard, GarageSearchCard } from "./GarageCards";
+import { EatsCartCard, EatsMenuCard, EatsStoresCard } from "./EatsCards";
+import { TradeAlertCard, TradeDeskCard, TradeInsightsCard } from "./TradeCards";
 import { BookingConfirmedCard, CarRentalsCard, FlightsCard, HotelsCard, ReservationsCard, RestaurantsCard } from "./TravelCards";
 import { ArtifactCard, CodebaseCard, CodeChangesCard, CodeFileCard, GeneratingCard } from "./WorkspaceCards";
 import { core } from "../ws/core";
@@ -58,6 +61,17 @@ const BODY: Record<string, (p: { card: Card }) => React.ReactElement> = {
   code_changes: CodeChangesCard,
   support_blueprint: SupportBlueprintCard,
   car_listings: CarListingsCard,
+  garage: GarageCard,
+  eats_stores: EatsStoresCard,
+  trade_desk: TradeDeskCard,
+  trade_insights: TradeInsightsCard,
+  trade_alert: TradeAlertCard,
+  trade_order: TradeAlertCard,
+  eats_menu: EatsMenuCard,
+  eats_cart: EatsCartCard,
+  garage_search: GarageSearchCard,
+  garage_diagnosis: GarageDiagnosisCard,
+  garage_plan: GaragePlanCard,
   travel_flights: FlightsCard,
   travel_hotels: HotelsCard,
   travel_car_rentals: CarRentalsCard,
@@ -69,7 +83,7 @@ const BODY: Record<string, (p: { card: Card }) => React.ReactElement> = {
 const KIND_LABEL: Record<string, string> = {
   email_list: "MAIL", email: "MESSAGE", thread: "THREAD", draft: "DRAFT", confirm: "AUTHORIZE", calendar: "CALENDAR",
   files: "DRIVE", document: "DOCUMENT", notice: "STATUS", "visual.chart": "ANALYSIS", "visual.stats": "TELEMETRY",
-  "visual.table": "DATA", "visual.list": "INDEX", "visual.image": "IMAGE", "visual.link": "LINK", "visual.markdown": "BRIEF", "visual.map": "NAVIGATION", weather: "WEATHER", pylon_list: "PYLON", pylon_ticket: "TICKET", places: "PLACES", place: "PLACE", directions: "ROUTE", stock: "MARKETS", stock_compare: "COMPARE", market: "MARKETS", crypto: "CRYPTO", slack: "SLACK", sports_game: "SPORTS", sports_scoreboard: "SCORES", music: "MUSIC", video: "VIDEO", artifact: "FILE", codebase: "CODEBASE", code_file: "SOURCE", code_changes: "CHANGES", support_blueprint: "BLUEPRINT", car_listings: "GARAGE", generating: "STUDIO", travel_flights: "FLIGHTS", travel_hotels: "HOTELS", travel_car_rentals: "RENTALS", travel_restaurants: "RESERVATIONS", booking_confirmed: "BOOKED", travel_reservations: "ITINERARY",
+  "visual.table": "DATA", "visual.list": "INDEX", "visual.image": "IMAGE", "visual.link": "LINK", "visual.markdown": "BRIEF", "visual.map": "NAVIGATION", weather: "WEATHER", pylon_list: "PYLON", pylon_ticket: "TICKET", places: "PLACES", place: "PLACE", directions: "ROUTE", stock: "MARKETS", stock_compare: "COMPARE", market: "MARKETS", crypto: "CRYPTO", slack: "SLACK", sports_game: "SPORTS", sports_scoreboard: "SCORES", music: "MUSIC", video: "VIDEO", artifact: "FILE", codebase: "CODEBASE", code_file: "SOURCE", code_changes: "CHANGES", support_blueprint: "BLUEPRINT", car_listings: "LISTINGS", garage: "GARAGE", eats_stores: "UBER EATS", trade_desk: "TRADING DESK", trade_insights: "INTELLIGENCE", trade_alert: "MARKET ALERT", trade_order: "ORDER", trade_orders: "ORDERS", eats_menu: "MENU", eats_cart: "CART", garage_search: "RECORDS", garage_diagnosis: "DIAGNOSTICS", garage_plan: "BUILD PLAN", generating: "STUDIO", travel_flights: "FLIGHTS", travel_hotels: "HOTELS", travel_car_rentals: "RENTALS", travel_restaurants: "RESERVATIONS", booking_confirmed: "BOOKED", travel_reservations: "ITINERARY",
 };
 
 export function HoloCard({ card, index }: { card: Card; index: number }) {

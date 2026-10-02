@@ -122,6 +122,20 @@ async def upload(request: Request, files: list[UploadFile] = File(...)):
     return {"files": out, "errors": errors}
 
 
+@app.get("/garage/file/{doc_id}")
+async def garage_file(doc_id: str, request: Request):
+    if not _authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    from jarvis_google import garage
+    if not (doc_id == "hero" or re.fullmatch(r"[A-Za-z0-9_\-]{10,80}", doc_id)):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    try:
+        path, mime = garage.file_path(doc_id)
+    except FileNotFoundError:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(path, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
+
+
 @app.get("/artifact/{artifact_id}/raw")
 async def artifact_raw(artifact_id: str, request: Request, v: int = 0):
     if not _authorized(request):
@@ -290,8 +304,11 @@ async def ws_endpoint(ws: WebSocket):
             elif t == "rpc":
                 async def run_rpc(d=data):
                     op, args, req = str(d.get("op", "")), dict(d.get("args") or {}), d.get("req")
+                    from jarvis_google import trading
                     fn = {"directions_mode": routes.directions_mode, "market_chart": markets.market_chart,
-                          "crypto_chart": markets.crypto_chart}.get(op)
+                          "crypto_chart": markets.crypto_chart, "trade_chart": trading.chart,
+                          "trade_preview": trading.preview, "trade_book": trading.orderbook,
+                          "trade_history": trading.trade_history}.get(op)
                     try:
                         r = {"ok": True, "result": await asyncio.to_thread(fn, **args)} if fn else {"ok": False, "error": "operation not allowed"}
                     except Exception as e:

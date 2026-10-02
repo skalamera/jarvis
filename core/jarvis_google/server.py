@@ -488,6 +488,179 @@ def image_edit(artifact_id: str, ops: list[dict], note: str = "") -> str:
     return _safe(AR.image_edit, artifact_id=artifact_id, ops=ops, note=note)
 
 
+# ------------------------------------------------------------------ trading desk (Kraken: crypto + stocks)
+@mcp.tool()
+def trade_portfolio() -> str:
+    """His Kraken portfolio (crypto + stocks + cash): live value, day change, cost basis, unrealized P&L, weights,
+    crypto exposure. Opens the TRADING DESK display. Use for any question about his holdings / account / P&L."""
+    from . import trading as TD
+    return _safe(lambda: TD.brief_portfolio(TD.portfolio()))
+
+
+@mcp.tool()
+def trade_insights(refresh: bool = False) -> str:
+    """Investment intelligence on HIS holdings: BUY/ADD/HOLD/TRIM/SELL per position with thesis, technicals,
+    levels, catalysts, plus portfolio risk and suggested actions. Opens the INTELLIGENCE display. refresh=true to
+    recompute now (otherwise cached up to 30 min). Not financial advice; speak it as JARVIS's read."""
+    from . import trading as TD
+    return _safe(TD.insights, refresh=refresh)
+
+
+@mcp.tool()
+def trade_quote(symbol: str, side: str = "buy", amount_usd: float = 0, quantity: float = 0, order_type: str = "market",
+                limit_price: float = 0, stop_price: float = 0) -> str:
+    """Price an order WITHOUT placing it: live bid/ask, quantity, Kraken fee, total, and Kraken's own validation."""
+    from . import trading as TD
+    return _safe(TD.preview, symbol=symbol, side=side, amount_usd=amount_usd, quantity=quantity, order_type=order_type,
+                 limit_price=limit_price, stop_price=stop_price)
+
+
+@mcp.tool()
+def trade_order(symbol: str, side: str, amount_usd: float = 0, quantity: float = 0, order_type: str = "market",
+                limit_price: float = 0, stop_price: float = 0, reason: str = "") -> str:
+    """Place a LIVE Kraken order (buy/sell; market, limit, stop-loss, take-profit, stop-limit). Give amount_usd OR
+    quantity. Returns awaiting_user_confirmation: a confirm card with the exact order; it executes only when he says
+    confirm or clicks Authorize. Only call when he explicitly asks to buy/sell (or approves your suggestion)."""
+    from . import trading as TD
+    return _safe(TD.order, symbol=symbol, side=side, amount_usd=amount_usd, quantity=quantity, order_type=order_type,
+                 limit_price=limit_price, stop_price=stop_price, reason=reason)
+
+
+@mcp.tool()
+def trade_orders() -> str:
+    """His open Kraken orders."""
+    from . import trading as TD
+    return _safe(TD.open_orders)
+
+
+@mcp.tool()
+def trade_cancel(txid: str) -> str:
+    """Cancel one of his open Kraken orders (txid from trade_orders)."""
+    from . import trading as TD
+    return _safe(TD.cancel, txid=txid)
+
+
+@mcp.tool()
+def trade_history(limit: int = 30) -> str:
+    """His recent Kraken fills (newest first)."""
+    from . import trading as TD
+    return _safe(TD.trade_history, limit=limit)
+
+
+@mcp.tool()
+def trade_alert(symbol: str, above: float = 0, below: float = 0, note: str = "") -> str:
+    """Set a price alert on any crypto or stock; JARVIS watches it and puts a card up (and tells him) when it hits."""
+    from . import trading as TD
+    return _safe(TD.alert_set, symbol=symbol, above=above, below=below, note=note)
+
+
+# ------------------------------------------------------------------ Uber Eats (browse + cart; ordering is confirm-only)
+@mcp.tool()
+def eats_search(query: str = "") -> str:
+    """Uber Eats restaurants / stores that deliver to his home, for a cuisine, dish or name ("bagels", "sushi",
+    "Bagel Zone"); empty = what's popular now. Opens the Uber Eats display with delivery times, ratings, promos."""
+    from . import eats as E
+    return _safe(E.search, query=query)
+
+
+@mcp.tool()
+def eats_menu(store: str) -> str:
+    """The COMPLETE Uber Eats menu of one store (name or store_id): every section and item with prices, on the menu
+    display. Use this whenever he asks what a place has / to see the menu. Never redraw the menu as a table."""
+    from . import eats as E
+    return _safe(E.menu, store=store)
+
+
+@mcp.tool()
+def eats_cart_add(store: str, item: str, qty: int = 1, options: list[str] | None = None, note: str = "") -> str:
+    """Add an item to his Uber Eats cart (one store per order). options = choice names exactly as he said them
+    ("Everything Bagel", "Toasted", "Bacon"). Returns any required choices that were defaulted: tell him."""
+    from . import eats as E
+    return _safe(E.cart_add, store=store, item=item, qty=qty, options=options, note=note)
+
+
+@mcp.tool()
+def eats_cart_remove(item: str = "", clear: bool = False) -> str:
+    """Remove one item (name) from the Uber Eats cart, or clear=true to empty it."""
+    from . import eats as E
+    return _safe(E.cart_remove, item=item, clear=clear)
+
+
+@mcp.tool()
+def eats_cart() -> str:
+    """Show his current Uber Eats cart."""
+    from . import eats as E
+    return _safe(E.cart)
+
+
+@mcp.tool()
+def eats_order(tip_pct: int = 15) -> str:
+    """Place the Uber Eats cart as an order. ALWAYS ends in a confirm card with the full total (items, fees, tax,
+    tip); never claims it was ordered. Only call when he explicitly asks to order / check out."""
+    from . import eats as E
+    return _safe(E.order, tip_pct=tip_pct)
+
+
+# ------------------------------------------------------------------ his car: 2003 Mercedes-Benz CL600 (garage)
+@mcp.tool()
+def car_profile(section: str = "overview") -> str:
+    """Stephen's 2003 Mercedes-Benz CL600 (C215): opens the GARAGE display and returns facts from HIS records.
+    section: overview | specs | service (full history) | mods | maintenance (due / overdue) | issues (known C215/M275
+    problems vs his car) | docs (receipts, manual, diagrams) | plans (upgrade plans). Use for any question about his car."""
+    from . import garage as GA
+    return _safe(GA.car_profile, section=section)
+
+
+@mcp.tool()
+def car_search(query: str) -> str:
+    """Search the full text of his car documents (owner's manual, receipts, fuse chart, ABC guide, engine diagram,
+    dipstick levels...) for exact specs, part numbers, fuse assignments, past work. Returns cited excerpts."""
+    from . import garage as GA
+    return _safe(GA.search, query=query)
+
+
+@mcp.tool()
+def car_diagnose(symptoms: str = "", artifact_ids: list[str] | None = None) -> str:
+    """Troubleshoot his CL600 from photos / videos he attached (artifact_ids from the attachment note) and/or a
+    description of the symptoms, using his car's service history and configuration. Shows a diagnosis display."""
+    from . import garage as GA
+    return _safe(GA.diagnose, symptoms=symptoms, artifact_ids=artifact_ids or [])
+
+
+@mcp.tool()
+def car_plan(title: str, goal: str, stages: list[dict], considerations: list[str] | None = None, plan_id: str = "") -> str:
+    """Save and show an aftermarket upgrade / build plan for his CL600. stages: [{name, notes, items: [{part, brand,
+    part_number, est_cost, labor_hours, notes}]}] in install order. considerations: compatibility / tuning / warranty
+    notes specific to his car. Pass plan_id to revise an existing plan."""
+    from . import garage as GA
+    return _safe(GA.plan_save, title=title, goal=goal, stages=stages, considerations=considerations, plan_id=plan_id)
+
+
+@mcp.tool()
+def car_log(summary: str, date: str = "", mileage: int = 0, vendor: str = "", cost: float = 0,
+            items: list[str] | None = None, kind: str = "maintenance") -> str:
+    """Record work done on his car that he tells you about (kind: maintenance | repair | upgrade | inspection).
+    Only log what he actually states."""
+    from . import garage as GA
+    return _safe(GA.log_work, summary=summary, date=date, mileage=mileage, vendor=vendor, cost=cost, items=items, kind=kind)
+
+
+@mcp.tool()
+def car_sync(rebuild: bool = False) -> str:
+    """Re-read his Google Drive car folder (new receipts, documents) and rebuild the car profile. Takes a minute or two.
+    rebuild=true re-derives the profile even with no new files (e.g. after car_fact)."""
+    from . import garage as GA
+    return _safe(GA.sync, rebuild=rebuild)
+
+
+@mcp.tool()
+def car_fact(fact: str) -> str:
+    """Remember a durable fact he states about his car's configuration ("I removed the sway bars", "it's on 19s now").
+    Authoritative over older documents. Only save what he actually says."""
+    from . import garage as GA
+    return _safe(GA.add_fact, fact=fact)
+
+
 # ------------------------------------------------------------------ travel & dining (search + confirm-to-book)
 @mcp.tool()
 def flights_search(destination: str, depart_date: str, return_date: str = "", origin: str = "", adults: int = 1,

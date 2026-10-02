@@ -389,6 +389,10 @@ class CoreLink {
     });
   }
 
+  garageFileUrl(id: string): string {
+    if (!this.cfg) return "";
+    return `${this.cfg.httpUrl}/garage/file/${encodeURIComponent(id)}?token=${encodeURIComponent(this.cfg.token)}`;
+  }
   artifactUrl(id: string, version: number): string {
     if (!this.cfg) return "";
     return `${this.cfg.httpUrl}/artifact/${id}/raw?v=${version}&token=${encodeURIComponent(this.cfg.token)}`;

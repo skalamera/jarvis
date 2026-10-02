@@ -142,6 +142,30 @@ def cards_from_feed(item: dict) -> list[dict]:
         return [card("support_blueprint", r.get("title") or "Hadrius Support Model", r)]
     if tool == "demo_note" and r.get("text"):
         return [card("notice", r.get("title") or "", r)]
+    if tool in ("trade_desk", "trade_portfolio") and r.get("kind") == "trade_desk":
+        return [card("trade_desk", "Trading Desk · Kraken", r)]
+    if tool == "trade_insights" and r.get("kind") == "trade_insights":
+        return [card("trade_insights", "Investment Intelligence", r)]
+    if tool == "trade_orders" and r.get("kind") == "trade_orders":
+        return [card("trade_orders", "Open orders", r)]
+    if tool in ("trade_alert", "trade_order_placed") and r.get("kind") in ("trade_alert", "trade_order"):
+        title = "Order placed" if r["kind"] == "trade_order" else "Market alert"
+        return [card(r["kind"], title, r)]
+    if tool == "eats_search" and r.get("kind") == "eats_stores":
+        return [card("eats_stores", f"Uber Eats · {r.get('query') or 'Near you'}", r)]
+    if tool == "eats_menu" and r.get("kind") == "eats_menu":
+        return [card("eats_menu", r.get("name") or "Menu", r)]
+    if tool == "eats_cart" and r.get("kind") == "eats_cart":
+        return [card("eats_cart", f"Cart · {r.get('store_name') or 'empty'}", r)]
+    if tool == "car_profile" and r.get("kind") == "garage":
+        v = (r.get("profile") or {}).get("vehicle") or {}
+        return [card("garage", f"{v.get('year', 2003)} {v.get('make', 'Mercedes-Benz')} {v.get('model', 'CL600')}", r)]
+    if tool == "car_search" and r.get("kind") == "garage_search":
+        return [card("garage_search", f"Your car documents · “{r.get('query', '')}”", r)]
+    if tool == "car_diagnose" and r.get("kind") == "garage_diagnosis":
+        return [card("garage_diagnosis", "Diagnosis · CL600", r)]
+    if tool == "car_plan" and r.get("kind") == "garage_plan":
+        return [card("garage_plan", f"Build plan · {r.get('title', '')}", r)]
     if tool == "reservations_list" and r.get("kind") == "reservations":
         return [card("travel_reservations", f"Your reservations · {len(r.get('items') or [])}", r)]
     if tool in ("flights_search", "hotels_search", "car_rentals_search", "restaurants_search") and r.get("kind"):

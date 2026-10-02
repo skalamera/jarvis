@@ -1,0 +1,153 @@
+{
+ "uuid": "store-1",
+ "title": "Test Bagels",
+ "slug": "test-bagels",
+ "isOpen": true,
+ "closedMessage": "",
+ "etaRange": {
+  "text": "16\u201336 Min"
+ },
+ "rating": {
+  "ratingValue": 4.8,
+  "reviewCount": "1000+"
+ },
+ "distanceBadge": {
+  "text": "0.6 mi"
+ },
+ "priceBucket": "$",
+ "cuisineList": [
+  "Bagels"
+ ],
+ "location": {
+  "address": "1 Main St, Testville, NY"
+ },
+ "hours": [
+  {
+   "dayRange": "Sunday - Monday",
+   "sectionHours": [
+    {
+     "startTime": 420,
+     "endTime": 780,
+     "sectionTitle": ""
+    }
+   ]
+  },
+  {
+   "dayRange": "Tuesday - Saturday",
+   "sectionHours": [
+    {
+     "startTime": 420,
+     "endTime": 840,
+     "sectionTitle": ""
+    }
+   ]
+  }
+ ],
+ "sections": [
+  {
+   "title": "Menu",
+   "subtitle": "7:00 AM \u2013 2:00 PM"
+  }
+ ],
+ "catalogSectionsMap": {
+  "00000000-0000-4000-8000-000000000006": [],
+  "00000000-0000-4000-8000-000000000008": [
+   {
+    "type": "VERTICAL_GRID",
+    "payload": {
+     "standardItemsPayload": {
+      "title": {
+       "text": "Bagels and Spreads"
+      },
+      "catalogItems": [
+       {
+        "uuid": "00000000-0000-4000-8000-000000000003",
+        "title": "Sliced Lox and Cream Cheese",
+        "price": 1695,
+        "itemDescription": "Sliced lox (cured salmon) paired with cream cheese. Perfect for bagels.",
+        "imageUrl": "https://example.com/item.jpg",
+        "isSoldOut": false,
+        "isAvailable": true,
+        "hasCustomizations": true,
+        "sectionUuid": "00000000-0000-4000-8000-000000000008",
+        "subsectionUuid": "00000000-0000-4000-8000-000000000004"
+       },
+       {
+        "uuid": "00000000-0000-4000-8000-000000000005",
+        "title": "Bagel with Cream Cheese",
+        "price": 475,
+        "itemDescription": "Soft, toasted bagel spread with rich cream cheese.",
+        "imageUrl": null,
+        "isSoldOut": false,
+        "isAvailable": true,
+        "hasCustomizations": true,
+        "sectionUuid": "00000000-0000-4000-8000-000000000008",
+        "subsectionUuid": "00000000-0000-4000-8000-000000000004"
+       },
+       {
+        "uuid": "00000000-0000-4000-8000-000000000002",
+        "title": "Bagel with Butter",
+        "price": 325,
+        "itemDescription": "Freshly baked bagel topped with a generous helping of butter.",
+        "imageUrl": null,
+        "isSoldOut": false,
+        "isAvailable": true,
+        "hasCustomizations": true,
+        "sectionUuid": "00000000-0000-4000-8000-000000000008",
+        "subsectionUuid": "00000000-0000-4000-8000-000000000004"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "type": "VERTICAL_GRID",
+    "payload": {
+     "standardItemsPayload": {
+      "title": {
+       "text": "Drinks"
+      },
+      "catalogItems": [
+       {
+        "uuid": "00000000-0000-4000-8000-000000000000",
+        "title": "Red Bull",
+        "price": 495,
+        "itemDescription": "",
+        "imageUrl": "https://example.com/item.jpg",
+        "isSoldOut": false,
+        "isAvailable": true,
+        "hasCustomizations": true,
+        "sectionUuid": "00000000-0000-4000-8000-000000000008",
+        "subsectionUuid": "00000000-0000-4000-8000-000000000001"
+       },
+       {
+        "uuid": "00000000-0000-4000-8000-000000000007",
+        "title": "Iced Coffee",
+        "price": 556,
+        "itemDescription": "Brewed coffee served over ice.",
+        "imageUrl": null,
+        "isSoldOut": false,
+        "isAvailable": true,
+        "hasCustomizations": true,
+        "sectionUuid": "00000000-0000-4000-8000-000000000008",
+        "subsectionUuid": "00000000-0000-4000-8000-000000000001"
+       },
+       {
+        "uuid": "00000000-0000-4000-8000-000000000009",
+        "title": "Juice",
+        "price": 395,
+        "itemDescription": "Cold juice available in assorted varieties.",
+        "imageUrl": null,
+        "isSoldOut": false,
+        "isAvailable": true,
+        "hasCustomizations": true,
+        "sectionUuid": "00000000-0000-4000-8000-000000000008",
+        "subsectionUuid": "00000000-0000-4000-8000-000000000001"
+       }
+      ]
+     }
+    }
+   }
+  ]
+ }
+}
