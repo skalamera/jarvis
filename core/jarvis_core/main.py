@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
-from jarvis_google import artifacts, code, markets, places, pylon, routes, sports, store
+from jarvis_google import artifacts, code, markets, media, places, pylon, routes, sports, store
 from jarvis_google import tools as gtools
 from jarvis_google.accounts import linked_accounts
 
@@ -308,7 +308,8 @@ async def ws_endpoint(ws: WebSocket):
                     fn = {"directions_mode": routes.directions_mode, "market_chart": markets.market_chart,
                           "crypto_chart": markets.crypto_chart, "trade_chart": trading.chart,
                           "trade_preview": trading.preview, "trade_book": trading.orderbook,
-                          "trade_history": trading.trade_history}.get(op)
+                          "trade_history": trading.trade_history,
+                          "music_artist": media.music_artist, "music_album": media.music_album}.get(op)
                     try:
                         r = {"ok": True, "result": await asyncio.to_thread(fn, **args)} if fn else {"ok": False, "error": "operation not allowed"}
                     except Exception as e:

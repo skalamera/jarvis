@@ -67,6 +67,9 @@ def _track(t: dict) -> dict | None:
     artists = ", ".join(a.get("name", "") for a in t.get("artists") or [] if a.get("name"))
     album = t.get("album")
     return {"video_id": vid, "title": t.get("title", ""), "artist": artists,
+            "artists": [{"name": a["name"], "id": a.get("id")} for a in t.get("artists") or []
+                        if isinstance(a, dict) and a.get("name")],
+            "album_id": album.get("id") if isinstance(album, dict) else None,
             "album": album.get("name", "") if isinstance(album, dict) else (album or ""),
             "duration": _secs(t.get("duration_seconds") or t.get("duration") or t.get("length")),
             "thumb": _thumb(t.get("thumbnails") or t.get("thumbnail"))}
@@ -145,6 +148,62 @@ def music_search(query: str, kind: str = "") -> dict:
     queue = _safe(lambda: _song_radio(song), [song])
     return {"mode": "song", "title": song["title"], "subtitle": " · ".join(x for x in (song["artist"], song["album"]) if x),
             "art": song["thumb"], "queue": queue, "url": f"https://music.youtube.com/watch?v={song['video_id']}"}
+
+
+def _year(x: dict) -> str:
+    y = x.get("year")
+    return str(y) if y and str(y).isdigit() else ""
+
+
+def music_artist(artist_id: str = "", name: str = "") -> dict:
+    """An artist's page for the music display: header, top songs (playable), albums, singles, similar artists.
+    Read-only: browsing it never touches what's playing."""
+    def fetch() -> dict:
+        yt: Any = _ytm()
+        aid = artist_id
+        if not aid:
+            hits = yt.search(name, filter="artists", limit=3) if name else []
+            if not hits:
+                raise ValueError(f"No artist matching '{name}'.")
+            aid = hits[0]["browseId"]
+        ar = yt.get_artist(aid)
+        songs = ar.get("songs") or {}
+        top: list[dict | None] = []
+        if songs.get("browseId"):
+            pid = songs["browseId"]
+            top = [_track(t) for t in _safe(lambda: yt.get_playlist(pid[2:] if pid.startswith("VL") else pid, limit=25)
+                                            .get("tracks", []), [])]
+        if not top:
+            top = [_track(t) for t in songs.get("results") or []]
+
+        def rel(sec: str, kind: str) -> list[dict]:
+            return [{"id": x.get("browseId"), "title": x.get("title", ""), "year": _year(x), "type": kind,
+                     "thumb": _thumb(x.get("thumbnails"))}
+                    for x in (ar.get(sec) or {}).get("results") or [] if x.get("browseId")]
+        desc = ar.get("description") or ""
+        return {"id": aid, "name": ar.get("name") or name, "art": _thumb(ar.get("thumbnails")),
+                "subscribers": ar.get("subscribers"), "monthly_listeners": ar.get("monthlyListeners"),
+                "description": "" if desc in ("None", None) else desc[:600],
+                "top_songs": _dedupe(top)[:25], "albums": rel("albums", "Album"), "singles": rel("singles", "Single"),
+                "related": [{"id": x.get("browseId"), "name": x.get("title", ""), "subscribers": x.get("subscribers"),
+                             "thumb": _thumb(x.get("thumbnails"))}
+                            for x in (ar.get("related") or {}).get("results") or [] if x.get("browseId")][:12],
+                "url": f"https://music.youtube.com/channel/{aid}"}
+    return _cached(f"artist|{artist_id or name.lower().strip()}", 3600, fetch)
+
+
+def music_album(album_id: str) -> dict:
+    """One album / single's tracks for the music display."""
+    def fetch() -> dict:
+        a: Any = _ytm().get_album(album_id)
+        tracks = _dedupe([_track({**t, "thumbnails": t.get("thumbnails") or a.get("thumbnails"),
+                                  "album": {"name": a.get("title", ""), "id": album_id}}) for t in a.get("tracks", [])])
+        return {"id": album_id, "title": a.get("title", ""), "type": a.get("type") or "Album",
+                "artist": ", ".join(x.get("name", "") for x in a.get("artists") or []),
+                "artists": [{"name": x.get("name"), "id": x.get("id")} for x in a.get("artists") or [] if x.get("name")],
+                "year": _year(a), "art": _thumb(a.get("thumbnails")), "tracks": tracks,
+                "duration": a.get("duration"), "url": f"https://music.youtube.com/browse/{album_id}"}
+    return _cached(f"album|{album_id}", 3600, fetch)
 
 
 def _safe(fn: Callable[[], Any], default: Any = None) -> Any:
