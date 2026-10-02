@@ -13,6 +13,9 @@ def tv(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "jarvis.db")
     monkeypatch.setattr(TR, "PROFILE", tmp_path / "traveler.json")
     monkeypatch.setenv("DUFFEL_ACCESS_TOKEN", "duffel_test_x")
+    # hermetic: never read his real Resy login from ~/.hermes/.env
+    monkeypatch.setattr(TR, "_env", lambda n: "duffel_test_x" if n == "DUFFEL_ACCESS_TOKEN" else "")
+    monkeypatch.setattr(TR, "_resy_auth", {"token": "", "at": 0.0})
     return tmp_path
 
 
@@ -103,10 +106,13 @@ def test_restaurant_search_and_book_proposal(tv, monkeypatch):
         r = TR.restaurants_search("", "", "2026-10-03", "19:30", 2)
     assert r["options"][0]["times"][:2] == ["7:15 PM", "7:45 PM"]
     assert V.cards_from_feed(items[0])[0]["kind"] == "travel_restaurants"
-    p = TR.restaurant_book(64846, "2026-10-03", "19:30", 2)
-    a = store.get_action(p["action_id"])
-    assert a["params"]["config_token"] == "tok19:15" and a["preview"]["total"] == "No charge to reserve"
-    assert a["preview"]["policy"] == "Cancel 24h ahead."
+    booked = []
+    monkeypatch.setitem(TR._EXECUTORS, "restaurant_book", lambda account, **p: booked.append(p) or {
+        "category": "restaurant", "reference": "R1", "name": p["venue"]})
+    r = TR.restaurant_book(64846, "2026-10-03", "19:30", 2)  # no fees -> booked right away, no confirm card
+    assert r["status"] == "booked" and r["no_fees"] and booked[0]["config_token"] == "tok19:15"
+    assert not store.pending_actions()
+
 
 
 def test_resy_booking_needs_login(tv, monkeypatch):
@@ -174,3 +180,38 @@ def test_persona_forbids_credential_workarounds():
     from jarvis_core import persona as P
     txt = P.build_instructions("Stephen", "America/New_York")
     assert "NEVER work around these tools" in txt and "~/.hermes/.env" in txt
+
+
+
+def test_resy_fee_requires_confirmation(tv, monkeypatch):
+    slots = [{"date": {"start": "2026-10-03 19:30:00"}, "config": {"type": "Dining Room", "token": "tokA"}}]
+    monkeypatch.setattr(TR.httpx, "get", lambda url, **kw: _R({"results": {"venues": [{"slots": slots,
+                                                                                        "venue": {"name": "Carbone"}}]}}))
+    monkeypatch.setattr(TR.httpx, "post", lambda url, **kw: _R({"cancellation": {"display": {"policy": ["$50 pp no-show."]},
+                                                                               "fee": {"amount": 50}},
+                                                              "payment": {"amounts": {"total": 0}}}))
+    ran = []
+    monkeypatch.setitem(TR._EXECUTORS, "restaurant_book", lambda account, **p: ran.append(p) or {})
+    p = TR.restaurant_book(1, "2026-10-03", "19:30", 2)
+    assert p["status"] == "awaiting_user_confirmation" and not ran
+    assert "$50" in str(store.get_action(p["action_id"])["preview"]["lines"])
+
+
+def test_free_resy_cancel_is_immediate(tv, monkeypatch):
+    lst = _resy_list()
+    lst["reservations"][1]["cancellation"] = {"allowed": True, "fee": {"amount": 25,
+                                              "date_cut_off": "2099-10-01T19:45:00Z"}}  # still inside free window
+    monkeypatch.setattr(TR, "_resy_token", lambda force=False: "auth")
+    monkeypatch.setattr(TR.httpx, "get", lambda url, **kw: _R(lst))
+    posted = []
+    monkeypatch.setattr(TR.httpx, "post", lambda url, **kw: posted.append(kw.get("data")) or _R({}))
+    with store.capture():
+        r = TR.reservation_cancel("2", "resy")
+    assert r["status"] == "cancelled" and posted == [{"resy_token": "tok_new"}] and not store.pending_actions()
+
+
+def test_fee_due_now_window():
+    assert TR._fee_due_now({"fee": {"amount": 25}}) == 25
+    assert TR._fee_due_now({"fee": {"amount": 25, "date_cut_off": "2099-01-01T00:00:00Z"}}) == 0
+    assert TR._fee_due_now({"fee": {"amount": 25, "date_cut_off": "2000-01-01T00:00:00Z"}}) == 25
+    assert TR._fee_due_now({"fee": {"amount": 0}}) == 0 and TR._fee_due_now({}) == 0

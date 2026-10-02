@@ -125,7 +125,7 @@ export function RestaurantsCard({ card }: { card: Card }) {
           </div>
         </motion.div>
       ))}
-      <div className="muted small">Tap a time to reserve · you'll confirm before anything is booked</div>
+      <div className="muted small">Tap a time to reserve · books instantly when there are no fees, otherwise you confirm first</div>
     </div>
   );
 }
@@ -150,7 +150,7 @@ export function ReservationsCard({ card }: { card: Card }) {
           </div>
         </motion.div>
       ))}
-      <div className="muted small">Cancel shows the fee / refund first · nothing changes until you confirm</div>
+      <div className="muted small">Free Resy cancellations happen right away · anything with a fee (and all travel) asks you first</div>
     </div>
   );
 }

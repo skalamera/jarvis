@@ -215,6 +215,13 @@ def executor(kind: str):
     return deco
 
 
+def run_now(kind: str, account: str, params: dict, summary: str, preview: dict, reason: str) -> dict:
+    """Record an action and execute it immediately, without a confirm card. ONLY for actions Stephen pre-authorized
+    by standing rule (e.g. free Resy bookings/cancellations). Audited like a confirmed action (source auto:<reason>)."""
+    p = propose(kind, account, params, summary, preview)
+    return execute_action(p["action_id"], f"auto:{reason}")
+
+
 def execute_action(action_id: str, source: str) -> dict:
     """Run a confirmed action. ONLY JARVIS Core (after explicit user confirmation) calls this."""
     from . import tools  # noqa: F401  (registers executors)

@@ -30,8 +30,15 @@ log = logging.getLogger("jarvis.session")
 Send = Callable[[dict], Awaitable[None]]
 HEALTH_CHECK_INTERVAL_S = 10
 
-_CONFIRM = re.compile(r"^(?:(?:yes|yeah|yep|ok|okay)[, ]*)?(?:jarvis[, ]*)?(confirm(?:ed)?|authori[sz]e(?:d)?|send it|"
-                      r"do it|go ahead|proceed|approved?|yes,? send(?: it)?|send)(?:[, ]*(?:jarvis|please|now))*[.!]?$", re.I)
+# "cancel" is deliberately NOT a confirm verb: as an answer to a confirm card it means "don't".
+_VERB = r"(?:delete|remove|book|send|trash|share|reserve|do|make|create|run|post|write)"
+_CONFIRM = re.compile(
+    r"^(?:(?:yes|yeah|yep|yup|sure|ok|okay|absolutely|definitely|correct|affirmative)[, ]*)?(?:jarvis[, ]*)?"
+    r"(?:confirm(?:ed)?|authori[sz]e(?:d)?|send it|do it|go ahead|proceed(?: with (?:it|that|the \w+))?|continue|"
+    r"approved?|send|"
+    rf"(?:go ahead and |please )?{_VERB}(?: (?:it|that|them|this|the \w+(?: \w+)?))?|"
+    r"yes|yeah|yep|yup|sure|ok|okay|absolutely|definitely|correct|affirmative|that'?s right|sounds good)"
+    r"(?:[, ]*(?:jarvis|please|now|sir|then))*[.!]?$", re.I)
 _CANCEL = re.compile(r"^(?:(?:no|nope)[, ]*)?(?:jarvis[, ]*)?(cancel|abort|stop|don'?t(?: send| do it)?|never ?mind|"
                      r"hold off|scratch that|no)(?:[, ]*(?:that|it|jarvis|please))*[.!]?$", re.I)
 _RESET = re.compile(r"^(?:jarvis[, ]*)?(new (?:session|conversation|chat)|start over|reset(?: conversation)?)[.!]?$", re.I)
@@ -51,10 +58,10 @@ def classify_confirmation(text: str) -> str | None:
     t = text.strip().strip("\"'").strip()
     if len(t.split()) > 7:
         return None
+    if _CANCEL.match(t):  # checked first: "cancel" / "no, cancel it" always means don't do it
+        return "cancel"
     if _CONFIRM.match(t):
         return "confirm"
-    if _CANCEL.match(t):
-        return "cancel"
     return None
 
 
@@ -241,6 +248,12 @@ class Session:
             return
         await self.send({"type": "direct_result", "op": op, "ok": True, "result": result if op in self._DIRECT_EXEC
                          else None, "args": args})
+        if op in self._DIRECT_BOOK and isinstance(result, dict) and result.get("status") in ("booked", "cancelled"):
+            # a fee-free Resy booking / cancel he tapped: done on the spot
+            self.notes.append(f"Stephen tapped the HUD and it was done (no fees): {op} -> {result.get('name')}")
+            await self._flush_feed("direct")
+            await self.say_line("Your table is booked, sir." if result["status"] == "booked" else "Cancelled, sir.")
+            return
         if op in self._DIRECT_EXEC:
             self.notes.append(f"Stephen used the HUD to run {op} with {args}.")
             if op == "gmail_trash_now":

@@ -27,7 +27,7 @@ from .audio import MicPipeline, WakeWord
 from .briefing import briefing
 from .config import settings
 from .hermes_client import HermesClient
-from .session import Session
+from .session import Session, classify_confirmation
 from .voice import Voice, pcm16_to_wav
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -185,7 +185,9 @@ async def ws_endpoint(ws: WebSocket):
             return
         await send({"type": "transcript", "text": text, "via": via})
         answering = session.briefing_question is not None and not session.briefing_question.done()
-        if not is_noise_transcript(text, via):
+        # A confirm card is waiting: a short "yes" / "delete it" / "cancel" is his answer, never room noise.
+        confirming = bool(store.pending_actions() or session.approvals) and classify_confirmation(text) is not None
+        if confirming or not is_noise_transcript(text, via):
             await session.user_input(text, source="voice")
         elif answering:
             session.answer_timed_out()
@@ -265,7 +267,7 @@ async def ws_endpoint(ws: WebSocket):
                 mic.suspended = bool(data.get("playing"))  # avoid self-triggering the wake word
             elif t == "playback_done":
                 cancel_follow_up()
-                was_speaking = session._state == "speaking" and not session._busy()
+                was_speaking = session._state in ("speaking", "confirm") and not session._busy()
                 await session.handle(data)
                 if (was_speaking
                         and settings.follow_up_s > 0
@@ -274,8 +276,10 @@ async def ws_endpoint(ws: WebSocket):
                     async def start_follow_up():
                         try:
                             await asyncio.sleep(0.3)
-                            if session._state == "idle" and not session._busy() and mic.mode == "wake":
-                                await mic.listen_follow_up(settings.follow_up_s)
+                            # A confirm card is waiting: listen longer for his spoken "confirm" / "cancel".
+                            awaiting = session._state == "confirm" and bool(store.pending_actions() or session.approvals)
+                            if (session._state == "idle" or awaiting) and not session._busy() and mic.mode == "wake":
+                                await mic.listen_follow_up(CONFIRM_LISTEN_S if awaiting else settings.follow_up_s)
                         except asyncio.CancelledError:
                             pass
                     follow_up_task = asyncio.create_task(start_follow_up())
@@ -416,6 +420,9 @@ def after_wake_word(text: str) -> str:
     m = _HEY.search(text or "")
     rest = (text[m.end():] if m else text or "").lstrip(" ,.!?-")
     return rest if len(rest.split()) >= 2 else ""
+
+
+CONFIRM_LISTEN_S = 8.0  # how long the mic stays open for a spoken "confirm" / "cancel" after he's asked
 
 
 def sleep_word(text: str) -> str | None:

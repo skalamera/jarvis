@@ -593,7 +593,8 @@ def restaurants_search(query: str = "", near: str = "", date: str = "", time: st
 
 
 def restaurant_book(venue_id: int, date: str, time: str, party_size: int = 2, seating: str = "") -> dict:
-    """Find the slot (closest to `time`), read its policy, and put a confirm card up."""
+    """Find the slot (closest to `time`) and read its policy. No fees at all (no deposit / charge, no no-show or
+    late-cancel fee) = book it right away (his standing rule). Any fee = a confirm card he must authorize."""
     day = _date(date)
     party = max(1, int(party_size or 2))
     f = httpx.get(f"{RESY}/4/find", headers=_resy_headers(), timeout=25,
@@ -627,9 +628,39 @@ def restaurant_book(venue_id: int, date: str, time: str, party_size: int = 2, se
                "photo": ((venue.get("images") or [None])[0]) if isinstance(venue.get("images"), list) else None,
                "lines": lines, "total": _money(total) if total else "No charge to reserve",
                "policy": canc or "Standard Resy cancellation policy", "test_mode": False}
-    return store.propose("restaurant_book", "resy", {"config_token": s["token"], "day": day, "party_size": party,
-                                                     "venue": name, "time_label": s["label"]},
-                         f"Reserve {name}, {s['label']} for {party}", preview)
+    params = {"config_token": s["token"], "day": day, "party_size": party, "venue": name, "time_label": s["label"]}
+    summary = f"Reserve {name}, {s['label']} for {party}"
+    fees = _fee_amount(fee) > 0 or total > 0 or bool(det.get("cancellation") is None and d.status_code >= 300)
+    if not fees:
+        out = store.run_now("restaurant_book", "resy", params, summary, preview, "no_fees")
+        if not out.get("ok"):
+            raise RuntimeError(out.get("error") or "Resy booking failed")
+        return {"status": "booked", "no_fees": True, **out["result"], "policy": preview["policy"],
+                "note": "Booked immediately (no fees, his standing rule). Tell him it's booked; the confirmation is on screen."}
+    return store.propose("restaurant_book", "resy", params, summary, preview)
+
+
+def _fee_amount(fee: dict | None) -> float:
+    try:
+        return float((fee or {}).get("amount") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _fee_due_now(canc: dict) -> float:
+    """The cancellation fee that would apply if he cancelled right now (0 inside the free-cancellation window)."""
+    fee = canc.get("fee") or {}
+    amt = _fee_amount(fee)
+    if amt <= 0 or fee.get("applies") is False:
+        return 0.0
+    cut = fee.get("date_cut_off")
+    if cut:
+        try:
+            if dt.datetime.now(dt.timezone.utc) < dt.datetime.fromisoformat(str(cut).replace("Z", "+00:00")):
+                return 0.0
+        except ValueError:
+            pass
+    return amt
 
 
 def _exec_resy(account: str, config_token: str, day: str, party_size: int, venue: str = "", time_label: str = "") -> dict:
@@ -676,7 +707,7 @@ def _resy_reservations(upcoming_only: bool = True) -> list[dict]:
         v = venues.get(str((x.get("venue") or {}).get("id"))) or {}
         loc = v.get("location") or {}
         canc = x.get("cancellation") or {}
-        fee = ((canc.get("fee") or {}).get("amount")) or 0
+        fee = _fee_due_now(canc)
         t = (x.get("time_slot") or "00:00")[:5]
         hh, mm = map(int, t.split(":"))
         out.append({
@@ -763,9 +794,15 @@ def reservation_cancel(reservation_id: str, provider: str = "resy") -> dict:
                    "lines": lines, "total": r["cancel_fee"] or "No cancellation fee", "total_label": "Fee",
                    "policy": r["policy"] or "Cancelling releases the table.", "danger": "This gives up the table.",
                    "test_mode": False, "action_label": "Cancel reservation"}
-        return store.propose("reservation_cancel", "resy", {"provider": "resy", "token": r["token"], "name": r["name"],
-                                                            "reservation_id": rid},
-                             f"Cancel {r['name']}, {r['time_label']} on {r['day']}", preview)
+        params = {"provider": "resy", "token": r["token"], "name": r["name"], "reservation_id": rid}
+        summary = f"Cancel {r['name']}, {r['time_label']} on {r['day']}"
+        if not r["cancel_fee"]:  # free to cancel right now: do it (his standing rule)
+            out = store.run_now("reservation_cancel", "resy", params, summary, preview, "no_fees")
+            if not out.get("ok"):
+                raise RuntimeError(out.get("error") or "Resy cancel failed")
+            return {"status": "cancelled", "no_fees": True, **out["result"],
+                    "note": "Cancelled immediately (no fee, his standing rule). Tell him it's done."}
+        return store.propose("reservation_cancel", "resy", params, summary, preview)
     if provider in ("duffel_flight", "duffel_hotel", "duffel_car"):
         b = next((x for x in _duffel_bookings() if x["id"] == rid), None)
         if not b:

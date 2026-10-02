@@ -551,8 +551,8 @@ def restaurants_search(query: str = "", near: str = "", date: str = "", time: st
 
 @mcp.tool()
 def restaurant_book(venue_id: int, date: str, time: str, party_size: int = 2, seating: str = "") -> str:
-    """Prepare a Resy reservation (closest open time to `time`): shows a confirm card with the cancellation / no-show
-    policy. Reserved only when Stephen authorizes it."""
+    """Reserve a Resy table (closest open time to `time`). No fees involved -> booked immediately (his standing rule).
+    Any deposit / no-show / late-cancel fee -> a confirm card he must authorize. Only call when he asked to book."""
     from . import travel as TR
     return _safe(TR.restaurant_book, venue_id=venue_id, date=date, time=time, party_size=party_size, seating=seating)
 
@@ -567,8 +567,9 @@ def reservations_list() -> str:
 
 @mcp.tool()
 def reservation_cancel(reservation_id: str, provider: str = "resy") -> str:
-    """Prepare to cancel one of his reservations (ids + provider from reservations_list: resy | duffel_flight |
-    duffel_hotel | duffel_car). Shows a confirm card with any fee / refund; cancelled only when he authorizes it."""
+    """Cancel one of his reservations (ids + provider from reservations_list: resy | duffel_flight | duffel_hotel |
+    duffel_car). A Resy table with no cancellation fee right now is cancelled immediately; anything with a fee, and
+    all flights / hotels / cars, show a confirm card he must authorize."""
     from . import travel as TR
     return _safe(TR.reservation_cancel, reservation_id=reservation_id, provider=provider)
 

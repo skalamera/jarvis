@@ -91,3 +91,14 @@ async def test_session_health_loop_emits_change(monkeypatch):
     health_m = next((m for m in msgs if m["type"] == "health"), None)
     assert health_m is not None
     assert health_m == {"type": "health", "hermes": True, "voice": True}
+
+
+
+def test_natural_spoken_confirmations():
+    for t in ["Yes, delete it.", "yes", "Yeah go ahead and remove it", "sure", "do it please", "continue",
+              "Proceed with the deletion", "yes send it", "Okay, book it", "that's right"]:
+        assert classify_confirmation(t) == "confirm", t
+    for t in ["cancel", "No, cancel it", "never mind", "don't", "no"]:
+        assert classify_confirmation(t) == "cancel", t
+    for t in ["Cancel the reservation", "What time is it?", "delete everything in my inbox and email my boss"]:
+        assert classify_confirmation(t) is None, t  # ambiguous / a new request: goes to the model, never auto-confirms
