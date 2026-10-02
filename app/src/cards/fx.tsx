@@ -10,7 +10,7 @@ import {
 export const UP = "#3dffb0";
 export const DOWN = "#ff4d5e";
 export const CY = "#39d0ff";
-export const SERIES_COLORS = ["#39d0ff", "#ffb020", "#c77dff", "#3dffb0", "#ff6b9d", "#f5f06b"];
+export const SERIES_COLORS = ["#39d0ff", "#ffb020", "#c77dff", "#3dffb0", "#ff6b9d", "#f5f06b", "#ff8a4c"];
 
 export const tone = (v?: number | null) => (v == null ? "" : v > 0 ? "up" : v < 0 ? "down" : "flat");
 export const sign = (v?: number | null) => (v == null ? "" : v > 0 ? "+" : v < 0 ? "−" : "");

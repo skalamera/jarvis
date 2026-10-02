@@ -14,6 +14,7 @@ import { MusicCard, VideoCard } from "./MediaCards";
 import { GameCard, ScoreboardCard } from "./SportsCards";
 import { SupportBlueprintCard } from "./SupportCards";
 import { CarListingsCard } from "./CarCards";
+import { BookingConfirmedCard, CarRentalsCard, FlightsCard, HotelsCard, ReservationsCard, RestaurantsCard } from "./TravelCards";
 import { ArtifactCard, CodebaseCard, CodeChangesCard, CodeFileCard, GeneratingCard } from "./WorkspaceCards";
 import { core } from "../ws/core";
 
@@ -57,12 +58,18 @@ const BODY: Record<string, (p: { card: Card }) => React.ReactElement> = {
   code_changes: CodeChangesCard,
   support_blueprint: SupportBlueprintCard,
   car_listings: CarListingsCard,
+  travel_flights: FlightsCard,
+  travel_hotels: HotelsCard,
+  travel_car_rentals: CarRentalsCard,
+  travel_restaurants: RestaurantsCard,
+  booking_confirmed: BookingConfirmedCard,
+  travel_reservations: ReservationsCard,
 };
 
 const KIND_LABEL: Record<string, string> = {
   email_list: "MAIL", email: "MESSAGE", thread: "THREAD", draft: "DRAFT", confirm: "AUTHORIZE", calendar: "CALENDAR",
   files: "DRIVE", document: "DOCUMENT", notice: "STATUS", "visual.chart": "ANALYSIS", "visual.stats": "TELEMETRY",
-  "visual.table": "DATA", "visual.list": "INDEX", "visual.image": "IMAGE", "visual.link": "LINK", "visual.markdown": "BRIEF", "visual.map": "NAVIGATION", weather: "WEATHER", pylon_list: "PYLON", pylon_ticket: "TICKET", places: "PLACES", place: "PLACE", directions: "ROUTE", stock: "MARKETS", stock_compare: "COMPARE", market: "MARKETS", crypto: "CRYPTO", slack: "SLACK", sports_game: "SPORTS", sports_scoreboard: "SCORES", music: "MUSIC", video: "VIDEO", artifact: "FILE", codebase: "CODEBASE", code_file: "SOURCE", code_changes: "CHANGES", support_blueprint: "BLUEPRINT", car_listings: "GARAGE", generating: "STUDIO",
+  "visual.table": "DATA", "visual.list": "INDEX", "visual.image": "IMAGE", "visual.link": "LINK", "visual.markdown": "BRIEF", "visual.map": "NAVIGATION", weather: "WEATHER", pylon_list: "PYLON", pylon_ticket: "TICKET", places: "PLACES", place: "PLACE", directions: "ROUTE", stock: "MARKETS", stock_compare: "COMPARE", market: "MARKETS", crypto: "CRYPTO", slack: "SLACK", sports_game: "SPORTS", sports_scoreboard: "SCORES", music: "MUSIC", video: "VIDEO", artifact: "FILE", codebase: "CODEBASE", code_file: "SOURCE", code_changes: "CHANGES", support_blueprint: "BLUEPRINT", car_listings: "GARAGE", generating: "STUDIO", travel_flights: "FLIGHTS", travel_hotels: "HOTELS", travel_car_rentals: "RENTALS", travel_restaurants: "RESERVATIONS", booking_confirmed: "BOOKED", travel_reservations: "ITINERARY",
 };
 
 export function HoloCard({ card, index }: { card: Card; index: number }) {

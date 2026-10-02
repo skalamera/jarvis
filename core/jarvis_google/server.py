@@ -488,6 +488,103 @@ def image_edit(artifact_id: str, ops: list[dict], note: str = "") -> str:
     return _safe(AR.image_edit, artifact_id=artifact_id, ops=ops, note=note)
 
 
+# ------------------------------------------------------------------ travel & dining (search + confirm-to-book)
+@mcp.tool()
+def flights_search(destination: str, depart_date: str, return_date: str = "", origin: str = "", adults: int = 1,
+                   cabin: str = "economy", nonstop_only: bool = False) -> str:
+    """Search real flights (Duffel) and show an offers display. Dates YYYY-MM-DD; return_date '' = one way.
+    origin '' = his New York airports (LaGuardia preferred, then JFK, then Newark). destination: IATA code or city.
+    cabin: economy | premium_economy | business | first."""
+    from . import travel as TR
+    return _safe(TR.flights_search, destination=destination, depart_date=depart_date, return_date=return_date,
+                 origin=origin, adults=adults, cabin=cabin, nonstop_only=nonstop_only)
+
+
+@mcp.tool()
+def flight_book(offer_id: str) -> str:
+    """Prepare to book a flight offer from flights_search: re-checks the live price and shows a confirm card with the
+    total and fare rules. Nothing is booked or charged until Stephen authorizes it on the card."""
+    from . import travel as TR
+    return _safe(TR.flight_book, offer_id=offer_id)
+
+
+@mcp.tool()
+def hotels_search(location: str, check_in: str, check_out: str, guests: int = 1, rooms: int = 1,
+                  free_cancellation_only: bool = False) -> str:
+    """Search hotels near a place (city, neighborhood, address or landmark) with live prices; shows a hotels display."""
+    from . import travel as TR
+    return _safe(TR.hotels_search, location=location, check_in=check_in, check_out=check_out, guests=guests,
+                 rooms=rooms, free_cancellation_only=free_cancellation_only)
+
+
+@mcp.tool()
+def hotel_book(search_result_id: str, rate_id: str = "") -> str:
+    """Prepare to book a hotel from hotels_search (cheapest room unless rate_id): quotes the final price and shows a
+    confirm card with the cancellation policy. Nothing is booked until Stephen authorizes it."""
+    from . import travel as TR
+    return _safe(TR.hotel_book, search_result_id=search_result_id, rate_id=rate_id)
+
+
+@mcp.tool()
+def car_rentals_search(location: str, pickup_date: str, dropoff_date: str, pickup_time: str = "10:00",
+                       dropoff_time: str = "10:00") -> str:
+    """Search rental cars (Avis, Hertz, Enterprise, Sixt, ...) at an airport code or address; shows a cars display."""
+    from . import travel as TR
+    return _safe(TR.car_rentals_search, location=location, pickup_date=pickup_date, dropoff_date=dropoff_date,
+                 pickup_time=pickup_time, dropoff_time=dropoff_time)
+
+
+@mcp.tool()
+def car_rental_book(rate_id: str) -> str:
+    """Prepare to book a rental car rate from car_rentals_search: shows a confirm card. Booked only on his authorization."""
+    from . import travel as TR
+    return _safe(TR.car_rental_book, rate_id=rate_id)
+
+
+@mcp.tool()
+def restaurants_search(query: str = "", near: str = "", date: str = "", time: str = "19:00", party_size: int = 2) -> str:
+    """Find Resy restaurants with open tables (near home unless `near`), showing the times closest to `time` (24h HH:MM).
+    query = a restaurant name or cuisine ('Carbone', 'sushi'); '' = best nearby."""
+    from . import travel as TR
+    return _safe(TR.restaurants_search, query=query, near=near, date=date, time=time, party_size=party_size)
+
+
+@mcp.tool()
+def restaurant_book(venue_id: int, date: str, time: str, party_size: int = 2, seating: str = "") -> str:
+    """Prepare a Resy reservation (closest open time to `time`): shows a confirm card with the cancellation / no-show
+    policy. Reserved only when Stephen authorizes it."""
+    from . import travel as TR
+    return _safe(TR.restaurant_book, venue_id=venue_id, date=date, time=time, party_size=party_size, seating=seating)
+
+
+@mcp.tool()
+def reservations_list() -> str:
+    """Stephen's upcoming reservations and bookings: Resy tables plus flights / hotels / cars booked through JARVIS.
+    Shows a display with a Cancel button on each."""
+    from . import travel as TR
+    return _safe(TR.reservations_list)
+
+
+@mcp.tool()
+def reservation_cancel(reservation_id: str, provider: str = "resy") -> str:
+    """Prepare to cancel one of his reservations (ids + provider from reservations_list: resy | duffel_flight |
+    duffel_hotel | duffel_car). Shows a confirm card with any fee / refund; cancelled only when he authorizes it."""
+    from . import travel as TR
+    return _safe(TR.reservation_cancel, reservation_id=reservation_id, provider=provider)
+
+
+@mcp.tool()
+def traveler_profile(given_name: str = "", family_name: str = "", born_on: str = "", gender: str = "", title: str = "",
+                     email: str = "", phone_number: str = "") -> str:
+    """Read (no args) or save Stephen's traveller details used for bookings: legal name as on his ID, date of birth
+    (YYYY-MM-DD), gender (m/f), title (mr), email, phone. Only save what he actually tells you."""
+    from . import travel as TR
+    if any((given_name, family_name, born_on, gender, title, email, phone_number)):
+        return _safe(TR.traveler_profile_set, given_name=given_name, family_name=family_name, born_on=born_on,
+                     gender=gender, title=title, email=email, phone_number=phone_number)
+    return _safe(TR.traveler_profile_get)
+
+
 @mcp.tool()
 def image_generate(prompt: str, aspect_ratio: str = "", source_artifact_id: str = "", quality: str = "fast",
                    filename: str = "") -> str:

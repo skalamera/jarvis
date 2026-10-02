@@ -184,21 +184,30 @@ async def ws_endpoint(ws: WebSocket):
             await session.state("idle")
             return
         await send({"type": "transcript", "text": text, "via": via})
+        answering = session.briefing_question is not None and not session.briefing_question.done()
         if not is_noise_transcript(text, via):
             await session.user_input(text, source="voice")
+        elif answering:
+            session.answer_timed_out()
         else:
             await session.state("idle")
 
     async def on_mic_event(ev: dict) -> None:
         if ev["type"] == "wake" and session.sleeping:  # "Hey Jarvis" wakes it the usual way (no cinematic)
             await session.wake_up()
-        if ev["type"] == "listening":
+        answering = session.briefing_question is not None and not session.briefing_question.done()
+        if ev["type"] == "listening" and answering:  # the briefing asked him a question: hear the answer, keep going
+            await session.state("listening")
+        elif ev["type"] == "listening":
             await session.cancel_turn()  # barge-in: stop speaking / thinking immediately
             await session.state("listening")
             # If another app swapped VoiceStudio's engine (e.g. a video render), reload ours while he talks
             asyncio.create_task(session.voice.keep_warm())
         elif ev["type"] == "listening_end" and ev.get("empty"):
-            await session.state("idle")
+            if answering:
+                session.answer_timed_out()
+            else:
+                await session.state("idle")
         await send(ev)
 
     mic = MicPipeline(on_mic_event, on_utterance, STATE["wake"])

@@ -125,8 +125,9 @@ class FakeVoice:
 
 
 class FakeSession:
-    def __init__(self):
+    def __init__(self, answer: str | None = "no"):
         self.sent, self.speak, self.voice, self._played = [], True, FakeVoice(), asyncio.Event()
+        self.briefing_question, self.pending_input, self.answer, self.listened = None, None, answer, []
 
     async def send(self, m):
         self.sent.append(m)
@@ -135,6 +136,13 @@ class FakeSession:
 
     async def state(self, s):
         self.sent.append({"type": "state", "state": s})
+
+    async def listen_for_answer(self, timeout_s):  # he answers a moment after the question
+        self.listened.append(timeout_s)
+        if self.answer is not None:
+            loop = asyncio.get_running_loop()
+            loop.call_later(0.05, lambda: self.briefing_question and not self.briefing_question.done()
+                            and self.briefing_question.set_result(self.answer))
 
 
 def test_support_tour_drives_tabs(blueprint):
@@ -149,30 +157,65 @@ def test_support_tour_drives_tabs(blueprint):
     assert any(m["type"] == "showcase" and not m["active"] for m in s.sent)
 
 
-def test_showcase_runs_beats_in_order(monkeypatch):
-    calls = []
-
-    def mk(label, n_cards=1):
+def _fake_beats(monkeypatch):
+    def mk(label):
         def b():
-            calls.append(label)
-            return S.Beat(label, f"{label} line.", [V.card("notice", label, {"text": label}) for _ in range(n_cards)])
+            return S.Beat(label, f"{label} line.", [V.card("notice", label, {"text": label})], after_s=0)
         return b
-    names = ["_weather", "_email", "_slack", "_pylon", "_calendar", "_markets", "_crypto", "_sports", "_commute", "_cars",
-             "_video", "_music"]
+    names = ["_weather", "_commute", "_calendar", "_email", "_mag7", "_btc"]
     fakes = {n: mk(n.strip("_").upper()) for n in names}
-    fakes["_commute"] = lambda: None  # a beat can opt out
-    fakes["_slack"] = lambda: (_ for _ in ()).throw(RuntimeError("slack down"))  # and fail
+    fakes["_calendar"] = lambda: None  # a beat can opt out
+    fakes["_email"] = lambda: (_ for _ in ()).throw(RuntimeError("gmail down"))  # and fail
     monkeypatch.setattr(S, "BRIEFING", [fakes[n] for n in names])
-    s = FakeSession()
+    monkeypatch.setattr(S, "CLOSING", [mk("VIDEO"), mk("MUSIC")])
+
+
+def _spoken(s):
+    return [m["text"] for m in s.sent if m["type"] == "speech"]
+
+
+def test_briefing_order_question_then_closing(monkeypatch):
+    _fake_beats(monkeypatch)
+    s = FakeSession(answer="No, not yet")
     asyncio.run(S.run(s))
-    labels = [m["label"] for m in s.sent if m["type"] == "showcase" and m.get("active") and m.get("step")]
-    assert labels == ["WEATHER", "EMAIL", "PYLON", "CALENDAR", "MARKETS", "CRYPTO", "SPORTS", "CARS", "VIDEO", "MUSIC"]
-    lines = [m["text"] for m in s.sent if m["type"] == "speech"]
-    assert lines[0].startswith("Good ") and lines[1] == "WEATHER line." and len(lines) == 11
-    # each beat's display lands before its line is spoken
+    lines = _spoken(s)
+    assert lines[0].startswith("Good ") and "your day" not in lines[0].lower()
+    assert lines[1:5] == ["WEATHER line.", "COMMUTE line.", "MAG7 line.", "BTC line."]
+    assert lines[5] == S.ASK_PREP and lines[6] in S._DECLINE_QUIPS
+    assert lines[7:] == ["VIDEO line.", "MUSIC line."]
+    assert s.listened == [S.ASK_PREP_LISTEN_S] and s.pending_input is None
     order = [m["type"] for m in s.sent if m["type"] in ("card", "speech")]
-    assert order[1:3] == ["card", "speech"]
+    assert order[1:3] == ["card", "speech"]  # each beat's display lands before its line
     assert s.sent[-1] == {"type": "state", "state": "idle"}
+
+
+def test_briefing_yes_hands_off_to_model(monkeypatch):
+    _fake_beats(monkeypatch)
+    s = FakeSession(answer="Yes please")
+    asyncio.run(S.run(s))
+    lines = _spoken(s)
+    assert lines[-1] == S.ASK_PREP and "VIDEO line." not in lines
+    assert "prepare for my upcoming meetings" in s.pending_input
+
+
+def test_briefing_silence_counts_as_no(monkeypatch):
+    _fake_beats(monkeypatch)
+    monkeypatch.setattr(S, "ASK_PREP_LISTEN_S", 0.05)
+    s = FakeSession(answer="")
+    asyncio.run(S.run(s))
+    assert _spoken(s)[-2:] == ["VIDEO line.", "MUSIC line."]
+
+
+@pytest.mark.parametrize("text,kind", [("no", "no"), ("No, not yet.", "no"), ("not yet", "no"), ("nope", "no"),
+                                       ("no thanks", "no"), ("maybe later", "no"), ("yes", "yes"),
+                                       ("Sure, the 12 o'clock", "yes"), ("what's on at noon?", "")])
+def test_prep_answer(text, kind):
+    assert S.prep_answer(text) == kind
+
+
+def test_btc_quip_varies_with_move():
+    calm, rally, crash = S._btc_quip(1, 0.2, 0), S._btc_quip(1, 7, 0), S._btc_quip(1, -8, 0)
+    assert len({calm, rally, crash}) == 3
 
 
 def test_showcase_cancel_is_clean(monkeypatch):
@@ -180,7 +223,7 @@ def test_showcase_cancel_is_clean(monkeypatch):
         import time
         time.sleep(0.05)
         return S.Beat("X", "x.", [])
-    monkeypatch.setattr(S, "BRIEFING", [slow] * 12)
+    monkeypatch.setattr(S, "BRIEFING", [slow] * 6)
     s = FakeSession()
 
     async def go():

@@ -188,6 +188,8 @@ _ABBREV = [
     (re.compile(r"\bQ([1-4])\b"), lambda m: "Q " + _ONES[int(m[1])]),
     (re.compile(r"\best\.(?=\s|$)"), "estimate"),
     (re.compile(r"\s+/\s+"), " or "),
+    # brand names the voice mispronounces (spoken text only; captions keep the real spelling)
+    (re.compile(r"\bResy\b", re.I), "Rezzy"),
 ]
 
 

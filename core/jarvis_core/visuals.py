@@ -142,6 +142,19 @@ def cards_from_feed(item: dict) -> list[dict]:
         return [card("support_blueprint", r.get("title") or "Hadrius Support Model", r)]
     if tool == "demo_note" and r.get("text"):
         return [card("notice", r.get("title") or "", r)]
+    if tool == "reservations_list" and r.get("kind") == "reservations":
+        return [card("travel_reservations", f"Your reservations · {len(r.get('items') or [])}", r)]
+    if tool in ("flights_search", "hotels_search", "car_rentals_search", "restaurants_search") and r.get("kind"):
+        k = r["kind"]
+        title = {"flights": f"Flights · {'/'.join(r.get('origins') or [])} → {r.get('destination', '')} · {r.get('depart_date', '')}",
+                 "hotels": f"Hotels · {r.get('near', '')} · {r.get('check_in', '')} → {r.get('check_out', '')}",
+                 "car_rentals": f"Rental cars · {r.get('near', '')} · {r.get('pickup_date', '')}",
+                 "restaurants": f"Tables · {r.get('query') or r.get('near', '')} · {r.get('date', '')} · {r.get('party_size', 2)} ppl"}[k]
+        return [card(f"travel_{k}", title, r)]
+    if tool == "booking" and r.get("category") == "cancel":
+        return [card("booking_confirmed", f"Cancelled · {r.get('name') or r.get('reference', '')}", r)]
+    if tool == "booking" and r.get("category"):
+        return [card("booking_confirmed", f"Booked · {r.get('name') or r.get('car') or r.get('reference', '')}", r)]
     if tool in ("image_generate", "video_generate") and r.get("generating"):
         g = r["generating"]
         what = "Video" if g.get("kind") == "video" else "Image"

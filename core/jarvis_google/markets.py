@@ -357,12 +357,12 @@ def _compare(syms: list[str], rng: str, record: bool) -> dict:
 
 
 def stock_quote(symbols: str, range: str = "", record: bool = True) -> dict:
-    """One symbol -> full stock card. 2-6 symbols (comma-separated) -> performance comparison card."""
+    """One symbol -> full stock card. 2-7 symbols (comma-separated) -> performance comparison card."""
     parts = [p.strip() for p in re.split(r"[,;/]| vs\.? | versus | and ", symbols or "", flags=re.I) if p.strip()]
     if not parts:
         raise ValueError("give at least one ticker or company name")
     syms: list[str] = []
-    for s in _pool.map(resolve_symbol, parts[:6]):
+    for s in _pool.map(resolve_symbol, parts[:7]):
         if s not in syms:
             syms.append(s)
     rng = (range or "").upper()

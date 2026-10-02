@@ -218,6 +218,8 @@ def executor(kind: str):
 def execute_action(action_id: str, source: str) -> dict:
     """Run a confirmed action. ONLY JARVIS Core (after explicit user confirmation) calls this."""
     from . import tools  # noqa: F401  (registers executors)
+    from . import travel
+    travel.register_executors()  # idempotent; survives a reload of this module (tests)
 
     action = _claim(action_id, "executing")
     if action is None:

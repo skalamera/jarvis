@@ -75,3 +75,10 @@ def test_request_body_preset_vs_profile():
     butler = Voice("http://x", "k", "JARVIS Butler", "omnivoice")
     b = butler.request_body("Hi.")
     assert b["model"] == "omnivoice" and b["num_step"] == 8 and b["instruct"]   # profile not resolved yet
+
+
+
+def test_resy_pronounced_rez_ee():
+    from jarvis_core.spoken import spoken
+    assert spoken("Booked on Resy, sir.") == "Booked on Rezzy, sir."
+    assert "Rezzy" in spoken("your RESY login") and spoken("Resynchronize") == "Resynchronize"

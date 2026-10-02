@@ -41,6 +41,9 @@ _ACTION_DONE = {
     "gmail_trash": "Moved to trash.", "gmail_delete_permanently": "Permanently deleted.",
     "calendar_create": "Event created and invitations sent.", "calendar_delete": "Event deleted.",
     "drive_share": "Shared.", "drive_trash": "Moved to trash.", "sheets_write": "Sheet updated.",
+    "flight_book": "Booked, sir. The confirmation is on screen.", "hotel_book": "Your room is booked, sir.",
+    "car_rental_book": "The car is reserved, sir.", "restaurant_book": "Your table is booked, sir.",
+    "reservation_cancel": "Cancelled, sir.",
 }
 
 
@@ -56,7 +59,7 @@ def classify_confirmation(text: str) -> str | None:
 
 
 # Tools whose displays may land after the turn ended (rendered in the background).
-BACKGROUND_TOOLS = {"video_generate"}
+BACKGROUND_TOOLS = {"video_generate", "booking"}
 
 class Session:
     def __init__(self, send: Send, hermes: HermesClient, voice: Voice):
@@ -81,6 +84,8 @@ class Session:
         self._tour_pending = False          # support_model(tour=True) ran this turn: narrate the tour after the reply
         self.sleeping = False               # dimmed HUD; "Morning, Jarvis" powers it on (cinematic + daily briefing)
         self.mic: Any = None                # the MicPipeline (main.py), so sleep can switch it into sleep-word mode
+        self.briefing_question: asyncio.Future | None = None  # the briefing is waiting for his answer to a question
+        self.pending_input: str | None = None  # a request made mid-briefing, run as a normal turn when it ends
 
     # ------------------------------------------------------------------ io
     async def send(self, msg: dict) -> None:
@@ -217,14 +222,20 @@ class Session:
     # human click on reversible / own-draft ops. gmail_trash_now: Stephen clicked Delete then "Confirm delete?"
     # on that specific visible email, so the double click IS the confirmation (Trash is recoverable + undo).
     _DIRECT_EXEC = {"gmail_delete_draft", "gmail_modify", "gmail_trash_now", "gmail_restore"}
+    # "Book" on an offer card: only PROPOSES (a confirm card he still has to authorize).
+    _DIRECT_BOOK = {"flight_book", "hotel_book", "car_rental_book", "restaurant_book", "reservation_cancel"}
 
     async def _direct(self, msg: dict) -> None:
         op, args = msg.get("op", ""), dict(msg.get("args") or {})
-        if op not in self._DIRECT_READ | self._DIRECT_PROPOSE | self._DIRECT_EXEC:
+        if op not in self._DIRECT_READ | self._DIRECT_PROPOSE | self._DIRECT_EXEC | self._DIRECT_BOOK:
             await self.send({"type": "direct_result", "op": op, "ok": False, "error": "operation not allowed"})
             return
         try:
-            result = await asyncio.to_thread(getattr(gtools, op), **args)
+            if op in self._DIRECT_BOOK:
+                from jarvis_google import travel
+                result = await asyncio.to_thread(getattr(travel, op), **args)
+            else:
+                result = await asyncio.to_thread(getattr(gtools, op), **args)
         except Exception as e:
             await self.send({"type": "direct_result", "op": op, "ok": False, "error": f"{type(e).__name__}: {e}"})
             return
@@ -252,6 +263,10 @@ class Session:
             await self.state("idle")
             return
         await self.send({"type": "user_message", "text": text, "source": source})
+        q = self.briefing_question
+        if q is not None and not q.done():  # the briefing asked him something: this is the answer, not a new turn
+            q.set_result(text)
+            return
 
         pending = [a for a in store.pending_actions()]
         verdict = classify_confirmation(text) if pending else None
@@ -293,6 +308,17 @@ class Session:
         await self.cancel_turn()  # barge-in
         self.turn_task = asyncio.create_task(self._turn(self._with_context(text)))
 
+    async def listen_for_answer(self, timeout_s: float) -> None:
+        """The briefing asked a question: open the mic for his reply without the wake word (if voice is on)."""
+        mic = self.mic
+        if mic is not None and mic.wake_enabled and mic.wake.available and mic.mode == "wake":
+            await mic.listen_follow_up(timeout_s)
+
+    def answer_timed_out(self) -> None:
+        q = self.briefing_question
+        if q is not None and not q.done():
+            q.set_result("")
+
     async def start_showcase(self, which: str, intro_delay: float = 0.0) -> None:
         """The preset demo, or the narrated support-model tour, run as this session's turn (Esc cancels it)."""
         await self.cancel_turn()
@@ -305,8 +331,12 @@ class Session:
             coro = showcase.run(self, intro_delay=intro_delay)
 
         async def guarded():
+            self.pending_input = None
             try:
                 await coro
+                if self.pending_input:  # he asked for something mid-briefing: handle it as a normal turn now
+                    text, self.pending_input = self.pending_input, None
+                    asyncio.create_task(self.user_input(text, source="voice"))
             except asyncio.CancelledError:
                 await self.send({"type": "showcase", "active": False})
                 raise
@@ -489,6 +519,7 @@ class Session:
         status = "executed" if out.get("ok") else "failed"
         await self.send({"type": "action_result", "action_id": action_id, "status": status, "result": out})
         if out.get("ok"):
+            await self._flush_feed("direct", only=BACKGROUND_TOOLS)  # e.g. the "Booked" confirmation display
             self.notes.append(f"Stephen CONFIRMED and it was executed: {action['summary']} -> {out.get('result')}")
             if action["kind"] in ("gmail_trash", "gmail_delete_permanently"):
                 await briefing.forget_messages(action["params"].get("message_ids") or [])

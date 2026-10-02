@@ -256,7 +256,7 @@ def _email() -> Beat | None:
     if todos:
         lead = (urgent or todos)[0]
         n = len(todos)
-        bits.append(f"Starting with your inbox: {n} thing{'s' if n != 1 else ''} need{'' if n != 1 else 's'} your attention."
+        bits.append(f"In your inbox, {n} thing{'s' if n != 1 else ''} need{'' if n != 1 else 's'} your attention."
                     f" The most pressing: {_sentence(lead['title'])}" + (f", by {_due(lead['due'])}" if lead.get("due") else "") + ".")
         rest = [t for t in todos if t is not lead][:1]
         if rest:
@@ -269,7 +269,7 @@ def _email() -> Beat | None:
     if not bits:
         if msgs:
             senders = _join(list(dict.fromkeys(_first(m.get("from_name") or "") for m in msgs if _first(m.get("from_name") or "")))[:3])
-            bits.append(f"Starting with your inbox: {len(msgs)} new email{'s' if len(msgs) != 1 else ''} worth a look"
+            bits.append(f"In your inbox, {len(msgs)} new email{'s' if len(msgs) != 1 else ''} worth a look"
                         + (f", from {senders}" if senders else "") + ".")
         else:
             bits.append("Your inbox is quiet: nothing new that needs you.")
@@ -410,6 +410,64 @@ def _crypto() -> Beat | None:
     return Beat("CRYPTO", line + ".", cards[::-1])
 
 
+MAG7 = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA"]
+_MAG7_NAMES = {"AAPL": "Apple", "MSFT": "Microsoft", "NVDA": "Nvidia", "GOOGL": "Alphabet", "AMZN": "Amazon",
+               "META": "Meta", "TSLA": "Tesla"}
+
+
+def _mag7() -> Beat | None:
+    """The Magnificent Seven over the past month, one comparison chart."""
+    from jarvis_google import markets as MK
+    r, items = _grab(MK.stock_quote, ",".join(MAG7), "1M")
+    series = [x for x in (r.get("series") or []) if x.get("period_pct") is not None] if isinstance(r, dict) else []
+    if not series:
+        return None
+    ranked = sorted(series, key=lambda x: x["period_pct"])
+    best, worst = ranked[-1], ranked[0]
+    up = sum(1 for x in series if x["period_pct"] > 0)
+    name = lambda x: _MAG7_NAMES.get(x["symbol"], _co(x.get("name") or x["symbol"]))
+    lead = ("All seven of the Magnificent Seven are up over the past month" if up == len(series) else
+            "All seven are down over the past month" if up == 0 else
+            f"Over the past month, {up} of the Magnificent Seven are up")
+    line = (f"{lead}. {name(best)} leads, {_pct(best['period_pct'])}, while {name(worst)} trails, "
+            f"{_pct(worst['period_pct'])}.")
+    return Beat("MARKETS", line, _cards(items))
+
+
+def _btc_quip(price: float, d24: float | None, d30: float | None) -> str:
+    """A dry aside on Bitcoin's mood, picked from the actual move (and varied by the day)."""
+    d = d24 or 0.0
+    if d <= -5:
+        pool = ["A spirited morning for the faithful, sir. I'd avoid checking it again before coffee.",
+                "Volatility is, I'm told, a feature."]
+    elif d <= -1.5:
+        pool = ["Down a touch. I'm sure the long-term thesis remains entirely unbothered.",
+                "A modest dip, which I'm reliably informed is an opportunity."]
+    elif d < 1.5:
+        pool = ["Remarkably calm, for something that was invented to be exciting.",
+                "Holding steady. Practically a savings account, by its standards.",
+                "Unmoved overnight, which by crypto standards is practically a nap."]
+    elif d < 5:
+        pool = ["Up nicely. I'll refrain from saying I told you so, as I didn't.",
+                "Climbing, sir. Someone on the internet is already calling it a supercycle."]
+    else:
+        pool = ["A rather dramatic rally. I'd brace for the victory laps on social media.",
+                "Soaring. I shall resist the urge to update my retirement projections."]
+    return pool[dt.date.today().toordinal() % len(pool)]
+
+
+def _btc() -> Beat | None:
+    from jarvis_google import markets as MK
+    c, items = _grab(MK.crypto_quote, "bitcoin", "1M")
+    if not isinstance(c, dict) or c.get("error") or not c.get("price"):
+        return None
+    ch = c.get("changes") or {}
+    price = c["price"]
+    p = f"{round(price / 1000, 1):g} thousand" if price >= 10000 else f"{price:,.0f}"  # "84 thousand", not "84.0"
+    line = f"BTC is at {p} dollars, {_pct(ch.get('24h'))} today. {_btc_quip(price, ch.get('24h'), ch.get('30d'))}"
+    return Beat("CRYPTO", line, _cards(items))
+
+
 def _cars() -> Beat | None:
     from jarvis_google import cars as CA
     r, items = _grab(CA.cars_nearby, "Mercedes-Benz", "CLS-Class", "CLS 550 4MATIC")
@@ -490,7 +548,8 @@ def _video() -> Beat | None:
     cards = _cards(items)
     if not cards:
         return None
-    return Beat("VIDEO", "And if you have a few minutes later, the latest Starship flight is worth a watch. I've queued it up.",
+    return Beat("VIDEO", "In that case, may I recommend the latest Starship flight? Rockets landing on chopsticks. "
+                         "Never gets old. I've queued it up for later.",
                 cards, after_s=7.0, ui=[{"op": "after", "card": V.card("media_control", "", {"action": "pause"})}])
 
 
@@ -500,10 +559,36 @@ def _music() -> Beat | None:
     cards = _cards(items)
     if not cards:
         return None
-    return Beat("MUSIC", "That's your day, sir. Something to start it with.", cards, after_s=0.2)
+    return Beat("MUSIC", "And something to start the day with.", cards, after_s=0.2)
 
 
-BRIEFING = [_weather, _email, _slack, _pylon, _calendar, _markets, _crypto, _sports, _commute, _cars, _video, _music]
+BRIEFING = [_weather, _commute, _calendar, _email, _mag7, _btc]
+CLOSING = [_video, _music]  # after he answers the meeting-prep question
+ASK_PREP = "Would you like to prepare for any of your upcoming meetings?"
+ASK_PREP_LISTEN_S = 8.0
+
+_PREP_NO = re.compile(r"^\W*(?:no|nope|nah|not (?:yet|now|right now)|maybe later|later|i'?m good|all good|"
+                      r"no,? (?:not yet|thanks?|thank you|i'?m good|later|not right now))\b", re.I)
+_PREP_YES = re.compile(r"^\W*(?:yes|yeah|yep|sure|please|ok(?:ay)?|let'?s|go ahead|absolutely)\b", re.I)
+_DECLINE_QUIPS = [
+    "Very well. I'll assume you intend to dazzle them on instinct, as usual.",
+    "Of course, sir. Preparation is overrated when one is as charming as you.",
+    "Understood. Improvisation it is. It has served you well. Mostly.",
+]
+
+
+def prep_answer(text: str) -> str:
+    """'no' (decline), 'yes' (help prep), or '' (something else: hand it to the model)."""
+    t = (text or "").strip()
+    if _PREP_NO.match(t):
+        return "no"
+    if _PREP_YES.match(t):
+        return "yes"
+    return ""
+
+
+def decline_quip() -> str:
+    return _DECLINE_QUIPS[dt.date.today().toordinal() % len(_DECLINE_QUIPS)]
 
 
 # ---------------------------------------------------------------- runner
@@ -570,7 +655,7 @@ async def run(session: "Session", intro_delay: float = 0.0) -> None:
     if intro_delay:
         await asyncio.sleep(intro_delay)
     try:
-        greeting = f"Good {part}, sir. Here's your day."
+        greeting = f"Good {part}, sir."
         await narr.play(greeting, await _synth(session, greeting))
         beats: list[Beat] = []
         for t in prep:
@@ -611,11 +696,66 @@ async def run(session: "Session", intro_delay: float = 0.0) -> None:
                         await session.send({"type": "card", "turn_id": turn_id, "card": op["card"]})
         finally:
             synth.cancel()
+        closing = [asyncio.create_task(asyncio.to_thread(b)) for b in CLOSING]  # fetch while we ask
+        if not await _ask_prep(session, narr):
+            for t in closing:
+                t.cancel()
+            return
+        await _play_beats(session, narr, turn_id, closing, offset=len(beats))
     finally:
         for t in prep:
             t.cancel()
+        session.briefing_question = None
         await session.send({"type": "showcase", "active": False})
         await session.state("idle")
+
+
+async def _ask_prep(session: "Session", narr: Narrator) -> bool:
+    """Ask about meeting prep and wait for his answer. True = carry on with the closing (he declined or said nothing);
+    False = he wants to prep / asked something else, which has been handed to the model."""
+    await session.send({"type": "showcase", "active": True, "step": 0, "total": 0, "label": "YOUR CALL"})
+    await narr.play(ASK_PREP, await _synth(session, ASK_PREP))
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future[str] = loop.create_future()
+    session.briefing_question = fut
+    await session.listen_for_answer(ASK_PREP_LISTEN_S)
+    try:
+        answer = await asyncio.wait_for(fut, timeout=ASK_PREP_LISTEN_S + 12)
+    except asyncio.TimeoutError:
+        answer = ""
+    finally:
+        session.briefing_question = None
+    kind = prep_answer(answer)
+    if kind == "no" or not answer.strip():
+        quip = decline_quip() if kind == "no" else "I'll take that as a no, sir."
+        await narr.play(quip, await _synth(session, quip))
+        return True
+    # "yes" or anything else: a real request. End the briefing and let the model handle it as a normal turn.
+    session.pending_input = ("Yes, help me prepare for my upcoming meetings today." if kind == "yes" else answer)
+    return False
+
+
+async def _play_beats(session: "Session", narr: Narrator, turn_id: str, tasks: list, offset: int = 0) -> None:
+    beats: list[Beat] = []
+    for t in tasks:
+        try:
+            b = await t
+        except Exception as e:
+            log.warning("showcase beat failed: %s", e)
+            continue
+        if b:
+            beats.append(b)
+    for i, b in enumerate(beats, 1):
+        await session.send({"type": "showcase", "active": True, "step": offset + i, "total": offset + len(beats),
+                            "label": b.label})
+        for c in b.cards:
+            await session.send({"type": "card", "turn_id": turn_id, "card": c})
+            await asyncio.sleep(0.12)
+        await narr.play(b.line, await _synth(session, b.line))
+        await asyncio.sleep(b.after_s)
+        for op in b.ui:
+            if op.get("op") == "after":
+                await session.send({"type": "card", "turn_id": turn_id, "card": op["card"]})
 
 
 async def support_tour(session: "Session", intro: str | None = "Allow me to walk you through it, sir.",

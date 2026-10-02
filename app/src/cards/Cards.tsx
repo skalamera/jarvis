@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import { core } from "../ws/core";
 import type { Card } from "../types";
 import { acctTag, bytes, dayLabel, fmtDate, fmtEventTime, initials, mimeLabel } from "./format";
+import { BookingPreview } from "./TravelCards";
 
 const Btn = ({ children, onClick, tone = "cyan", disabled }: { children: React.ReactNode; onClick?: () => void; tone?: "cyan" | "amber" | "red" | "ghost"; disabled?: boolean }) => (
   <button className={`hbtn hbtn-${tone}`} onClick={onClick} disabled={disabled}>{children}</button>
@@ -216,10 +217,11 @@ export function ConfirmCard({ card }: { card: Card }) {
       {p.type === "drive_share" && <div className="preview-mail"><div><b>{p.name}</b></div><div>→ {p.email} ({p.role})</div></div>}
       {p.type === "drive_trash" && <div className="preview-mail"><div><b>{p.name}</b></div></div>}
       {p.type === "command" && <pre className="preview-cmd">{p.command}</pre>}
+      {p.type === "booking" && <BookingPreview p={p} />}
       {status === "pending" ? (
         <>
           <div className="card-actions">
-            <Btn tone={danger ? "red" : "amber"} onClick={() => core.confirm(card.id, true)}>Authorize</Btn>
+            <Btn tone={danger ? "red" : "amber"} onClick={() => core.confirm(card.id, true)}>{p.type === "booking" ? (p.action_label || `Book · ${p.total}`) : "Authorize"}</Btn>
             <Btn tone="ghost" onClick={() => core.confirm(card.id, false)}>Cancel</Btn>
           </div>
           <div className="muted small">Or say “confirm” / “cancel”.</div>
