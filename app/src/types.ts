@@ -104,6 +104,8 @@ declare global {
       open: (url: string) => void;
       pathForFile?: (f: File) => string;
       pickFolder?: () => Promise<string | null>;
+      ytmLogin?: () => Promise<string | null>;
+      ytmLogout?: () => Promise<boolean>;
     };
   }
 }

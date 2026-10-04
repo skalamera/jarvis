@@ -14,6 +14,12 @@ export interface MediaPlayer {
   playing: () => boolean;
 }
 
+/** What the music card is playing, mirrored for the left-column mini player. */
+export type NowPlaying = {
+  cardId: string; title: string; artist: string; art?: string; playing: boolean; time: number; duration: number;
+  toggle: () => void; expand: () => void; next: () => void; previous: () => void; seek: (s: number) => void;
+};
+
 const DUCK = 0.2; // volume multiplier while JARVIS listens / speaks
 
 class MediaBus {
@@ -24,6 +30,23 @@ class MediaBus {
   muted = false;
   onChange: (playing: boolean) => void = () => {};
   private volSubs = new Set<() => void>();
+  nowPlaying: NowPlaying | null = null;
+  private npSubs = new Set<() => void>();
+
+  subscribeNowPlaying(fn: () => void): () => void {
+    this.npSubs.add(fn);
+    return () => this.npSubs.delete(fn);
+  }
+
+  setNowPlaying(np: NowPlaying | null): void {
+    this.nowPlaying = np;
+    for (const fn of this.npSubs) fn();
+  }
+
+  /** Clear only if this card still owns the slot (a newer music card may have replaced it). */
+  clearNowPlaying(cardId: string): void {
+    if (this.nowPlaying?.cardId === cardId) this.setNowPlaying(null);
+  }
 
   /** Volume/mute listeners (the cards' sliders follow voice commands like "turn it down"). */
   subscribeVolume(fn: () => void): () => void {

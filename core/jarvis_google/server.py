@@ -280,6 +280,25 @@ def _brief(tool: str, fn, **kw) -> str:
 
 # ------------------------------------------------------------------ media (YouTube Music / YouTube, read-only)
 @mcp.tool()
+def video_analyze(artifact_id: str, question: str = "") -> str:
+    """Watch an attached video (phone screen recording, camera clip, any desktop video file) with picture and
+    sound. question="" = full read: summary, timeline, on-screen text, issues, steps, speech. With a question
+    ("what error popped up?", "what did I tap after login?") = a direct answer with timestamps. Shows the video
+    display. Long videos continue in the background and the answer is spoken when ready."""
+    from . import video as VID
+    return _safe(VID.video_analyze, artifact_id=artifact_id, question=question)
+
+
+@mcp.tool()
+def music_library(action: str, song: str = "", playlist: str = "", new_playlist: str = "") -> str:
+    """His YouTube Music library (he's signed in): action = like (thumbs up) | unlike | dislike | add (to playlist) |
+    create (new playlist). song = a search like "Let It Happen Tame Impala"; empty = the song playing now.
+    playlist = one of HIS playlists by name; new_playlist = name for a new playlist (add + new_playlist creates it)."""
+    from . import media as M
+    return _safe(M.music_library_action, action=action, song=song, playlist=playlist, new_playlist=new_playlist)
+
+
+@mcp.tool()
 def music_play(query: str, kind: str = "") -> str:
     """Play music from YouTube Music in the HUD's music player (starts playing immediately). query = song, artist,
     album, playlist or mood ("Bohemian Rhapsody", "Kind of Blue", "lofi hip hop", "80s rock"). kind: "song"
@@ -761,27 +780,55 @@ def traveler_profile(given_name: str = "", family_name: str = "", born_on: str =
 
 @mcp.tool()
 def image_generate(prompt: str, aspect_ratio: str = "", source_artifact_id: str = "", quality: str = "fast",
-                   filename: str = "") -> str:
+                   filename: str = "", subject: str = "") -> str:
     """Generate a picture/photo/illustration from a text prompt with Gemini (Nano Banana) and show it on the HUD.
     Write a rich prompt (subject, setting, style, lighting, lens/mood). aspect_ratio: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2,
     2:3, 21:9. To change the CONTENT of an existing image (uploaded or generated): pass its source_artifact_id and say
     the change ("make it night", "put me in a suit"); that saves a new, undoable version. quality: fast | best.
-    Takes ~10-20 s."""
+    Takes ~10-20 s. subject: one of HIS saved things ("my car") when he refers to it; the real reference photos are
+    used so it's his exact one (see subject_list)."""
     from . import generate as GEN
     return _safe(GEN.image_generate, prompt=prompt, aspect_ratio=aspect_ratio, source_artifact_id=source_artifact_id,
-                 quality=quality, filename=filename)
+                 quality=quality, filename=filename, subject=subject)
 
 
 @mcp.tool()
 def video_generate(prompt: str, aspect_ratio: str = "16:9", duration_s: int = 8, image_artifact_id: str = "",
-                   quality: str = "fast", filename: str = "") -> str:
+                   quality: str = "fast", filename: str = "", subject: str = "") -> str:
     """Generate a short video clip (4, 6 or 8 s, with sound) from a prompt with Google Veo 3.1. Returns immediately:
     it renders in the background (1-3 min) and the HUD card turns into the playable video when done. Describe shot,
     subject, action, camera move, style and sound. image_artifact_id animates an existing image. aspect_ratio 16:9 or
-    9:16. quality: lite | fast | best (best is slower)."""
+    9:16. quality: lite | fast | best (best is slower). subject: one of HIS saved things ("my car") when he refers to
+    it; his real photos become Veo reference images (forces 16:9, 8 s)."""
     from . import generate as GEN
     return _safe(GEN.video_generate, prompt=prompt, aspect_ratio=aspect_ratio, duration_s=duration_s,
-                 image_artifact_id=image_artifact_id, quality=quality, filename=filename)
+                 image_artifact_id=image_artifact_id, quality=quality, filename=filename, subject=subject)
+
+
+@mcp.tool()
+def subject_save(name: str, artifact_ids: list[str], description: str = "", aliases: list[str] | None = None,
+                 replace: bool = False) -> str:
+    """Remember photos of one of HIS things for future image/video generation ("this is my car, remember it").
+    name: what he calls it ("my car"); artifact_ids: the attached/on-screen photo ids; description: anything he said
+    about it; aliases: other names ("the CL600", "the Benz"). Adds photos to an existing subject (max 3 kept) unless
+    replace=True. Then just confirm briefly."""
+    from . import subjects as SJ
+    return _safe(SJ.subject_save, name=name, artifact_ids=artifact_ids, description=description, aliases=aliases,
+                 replace=replace)
+
+
+@mcp.tool()
+def subject_list() -> str:
+    """His saved generation subjects (name, aliases, photo count, description)."""
+    from . import subjects as SJ
+    return _safe(SJ.subject_list)
+
+
+@mcp.tool()
+def subject_forget(name: str) -> str:
+    """Forget a saved subject when he asks (photos move to a recoverable trash)."""
+    from . import subjects as SJ
+    return _safe(SJ.subject_forget, name=name)
 
 
 @mcp.tool()

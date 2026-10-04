@@ -195,6 +195,55 @@ app.whenReady().then(async () => {
       defaultPath: path.join(app.getPath("home"), "Documents", "Projects") });
     return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
   });
+  // YouTube Music sign-in. Google refuses sign-in inside embedded app windows ("This browser or app may not be
+  // secure"), so this opens REAL Google Chrome with a dedicated, persistent JARVIS profile. Nothing attaches to the
+  // page while he signs in (only the HTTP target list is polled); once a tab is on music.youtube.com with a Google
+  // session cookie, JARVIS reads the music.youtube.com cookies and hands them to Core (stored 0600 in its state dir).
+  // The profile persists, so later sign-ins are one click and usually instant.
+  ipcMain.handle("jarvis:ytmLogin", () => new Promise<string | null>((resolve) => {
+    const chrome = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      path.join(app.getPath("home"), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome")].find((p) => fs.existsSync(p));
+    if (!chrome) { dialog.showErrorBox("Google Chrome needed", "Signing in to YouTube Music needs Google Chrome installed."); resolve(null); return; }
+    const profile = path.join(app.getPath("home"), ".hermes", "jarvis", "state", "ytmusic-chrome");
+    fs.mkdirSync(profile, { recursive: true });
+    const port = 9335;
+    const proc = spawn(chrome, [`--user-data-dir=${profile}`, `--remote-debugging-port=${port}`, "--remote-allow-origins=http://127.0.0.1",
+      "--no-first-run", "--no-default-browser-check", "--new-window", "https://music.youtube.com/"], { stdio: "ignore", detached: false });
+    let done = false;
+    const started = Date.now();
+    const getJson = (p: string): Promise<any> => new Promise((res, rej) => {
+      http.get({ host: "127.0.0.1", port, path: p, timeout: 2000 }, (r) => {
+        let b = ""; r.on("data", (c) => (b += c)); r.on("end", () => { try { res(JSON.parse(b)); } catch (e) { rej(e); } });
+      }).on("error", rej).on("timeout", function (this: any) { this.destroy(); rej(new Error("timeout")); });
+    });
+    const cookiesVia = (wsUrl: string): Promise<any[]> => new Promise((res, rej) => {
+      const ws = new WebSocket(wsUrl);
+      const t = setTimeout(() => { try { ws.close(); } catch {} rej(new Error("cdp timeout")); }, 5000);
+      ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: "Storage.getCookies" }));
+      ws.onmessage = (ev) => { const m = JSON.parse(String(ev.data)); if (m.id === 1) { clearTimeout(t); ws.close(); res(m.result?.cookies || []); } };
+      ws.onerror = () => { clearTimeout(t); rej(new Error("cdp error")); };
+    });
+    const finish = (v: string | null) => { if (done) return; done = true; clearInterval(timer); try { proc.kill(); } catch {} resolve(v); };
+    proc.on("exit", () => setTimeout(() => finish(null), 300));
+    const timer = setInterval(async () => {
+      if (Date.now() - started > 10 * 60_000) return finish(null);
+      try {
+        const tabs: any[] = await getJson("/json/list");
+        if (!tabs.some((t) => t.type === "page" && String(t.url).startsWith("https://music.youtube.com"))) return;
+        const ver = await getJson("/json/version");
+        const all = await cookiesVia(ver.webSocketDebuggerUrl);
+        const yt = all.filter((c) => /(^|\.)youtube\.com$/.test(String(c.domain).replace(/^\./, "")) || String(c.domain).endsWith(".youtube.com"));
+        if (!yt.some((c) => c.name === "SAPISID" || c.name === "__Secure-3PAPISID")) return;
+        if (!yt.some((c) => c.name === "LOGIN_INFO")) return; // fully signed in to YouTube, not just Google
+        finish(yt.map((c) => `${c.name}=${c.value}`).join("; "));
+      } catch { /* Chrome still starting */ }
+    }, 1500);
+  }));
+  ipcMain.handle("jarvis:ytmLogout", async () => {
+    // Forget JARVIS's Chrome profile too, so the next sign-in starts clean.
+    fs.rmSync(path.join(app.getPath("home"), ".hermes", "jarvis", "state", "ytmusic-chrome"), { recursive: true, force: true });
+    return true;
+  });
   ipcMain.on("jarvis:open", (_e, url: string) => {
     if (/^https?:\/\//.test(url) || /^tel:\+?[\d()\-. ]{3,20}$/.test(url) || /^slack:\/\/channel\?[\w=&%.-]+$/.test(url)) shell.openExternal(url);
   });
@@ -202,6 +251,15 @@ app.whenReady().then(async () => {
     const dockImg = nativeImage.createFromPath(path.join(ASSETS, "icon.png"));
     if (!dockImg.isEmpty()) app.dock.setIcon(dockImg); // dev runs show the JARVIS icon in the Dock too
   }
+  // Music visualizer: the HUD asks getDisplayMedia() for its OWN audio (the YouTube Music iframe lives in this
+  // window). Answer with this window's frame as both sources and keep local playback audible (enableLocalEcho).
+  // Tab capture of our own webContents needs no macOS screen-recording permission and never sees other apps.
+  session.defaultSession.setDisplayMediaRequestHandler((request, cb) => {
+    const frame = request.frame;
+    const own = frame && BrowserWindow.getAllWindows().some((w) => w.webContents.mainFrame === frame);
+    if (!own || !frame) return cb({});
+    cb({ video: frame, audio: frame, enableLocalEcho: true });
+  });
   // The HUD loads from file://, so YouTube's embedded player gets no Referer and refuses to play (error 153).
   // Give YouTube embed requests a stable app Referer (only those hosts; nothing else is touched).
   session.defaultSession.webRequest.onBeforeSendHeaders(

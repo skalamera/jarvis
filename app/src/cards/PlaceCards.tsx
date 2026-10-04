@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
 import { core } from "../ws/core";
+import { useStore } from "../state/store";
 import type { Card } from "../types";
 
 /* Google Places cards, laid out like Google's knowledge panel: header line (stars · reviews · price · type · open),
@@ -88,7 +89,9 @@ export function PlaceCard({ card }: { card: Card }) {
   const photos: any[] = p.photos || [];
   const q = encodeURIComponent(p.lat != null ? `${p.lat},${p.lng}` : p.address || p.name);
   const mapEmbed = `https://maps.google.com/maps?q=${q}&z=15&output=embed`;
-  const directions = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(p.name + " " + (p.address || ""))}&destination_place_id=${p.id}`;
+  // Directions open as a JARVIS directions card (Routes API via Core), never a browser window.
+  const toast = useStore((s) => s.toast);
+  const route = () => { toast({ text: `Routing to ${p.name}…` }); core.openDirections([p.name, p.address].filter(Boolean).join(", ")); };
   const reviews: any[] = allReviews ? p.reviews || [] : (p.reviews || []).slice(0, 2);
 
   return (
@@ -108,7 +111,7 @@ export function PlaceCard({ card }: { card: Card }) {
       <div className="pl-actions">
         {p.phone && <button className="bact" onClick={() => open(`tel:${p.phone_intl || p.phone}`)} title={p.phone}>☎ Call</button>}
         {p.website && <button className="bact" onClick={() => open(p.website)}>🌐 Website</button>}
-        <button className="bact primary" onClick={() => open(directions)}>➤ Directions</button>
+        <button className="bact primary" onClick={route}>➤ Directions</button>
         {p.reservable && <button className="bact" onClick={() => open(p.maps_url)}>🍽 Reserve</button>}
         <button className="bact icon" title="Open in Google Maps" onClick={() => open(p.maps_url)}>↗</button>
       </div>
@@ -116,6 +119,7 @@ export function PlaceCard({ card }: { card: Card }) {
       <div className={`pl-grid ${hoursOpen ? "hours-open" : ""}`}>
         <div className="pl-map">
           <iframe src={mapEmbed} title="map" loading="lazy" referrerPolicy="no-referrer-when-downgrade" />
+          <button className="pl-map-hit" title={`Directions to ${p.name}`} onClick={route} />
           <div className="pl-addr">{p.address}{p.phone ? <><br /><span className="muted">{p.phone}</span></> : null}</div>
         </div>
         <div className="pl-hours">

@@ -8,7 +8,9 @@ import type { Card } from "../types";
 const MODES: [string, string, string][] = [
   ["driving", "DRIVE", "🚗"], ["transit", "TRANSIT", "🚆"], ["walking", "WALK", "🚶"], ["bicycling", "BIKE", "🚲"],
 ];
-const EMBED_FLAG: Record<string, string> = { driving: "", walking: "w", transit: "r", bicycling: "b" };
+// Always send an explicit mode: with none, Google picks its own (walking for short trips) and the map
+// disagrees with the selected Drive tab.
+const EMBED_FLAG: Record<string, string> = { driving: "d", walking: "w", transit: "r", bicycling: "b" };
 const DIR_MODE: Record<string, string> = { driving: "driving", walking: "walking", transit: "transit", bicycling: "bicycling" };
 
 const ARROW: Record<string, string> = {

@@ -88,18 +88,26 @@ def _image_part(artifact_id: str) -> dict:
 
 # ------------------------------------------------------------------ images
 def image_generate(prompt: str, aspect_ratio: str = "", source_artifact_id: str = "", quality: str = "fast",
-                   filename: str = "") -> dict:
+                   filename: str = "", subject: str = "", show: bool = True) -> dict:
     """Generate an image from a prompt. With source_artifact_id the image is reworked (new version of that file)."""
     prompt = (prompt or "").strip()
     if not prompt:
         raise ValueError("describe the image to generate")
     model = IMAGE_MODELS.get(quality, IMAGE_MODELS["fast"])
     parts: list[dict] = [{"text": prompt}]
+    if subject:  # his saved thing ("my car"): the real photos ride along as references
+        from . import subjects as SJ
+        s = SJ.resolve(subject)
+        parts = [{"text": f"{prompt}\n\n{SJ.ref_text(s)}"}] + [
+            {"inlineData": {"mimeType": mt, "data": base64.b64encode(b).decode()}}
+            for b, mt in SJ.photos(s) + ([SJ.sheet(s)] if SJ.sheet(s) else [])]
+        quality = "best" if quality == "fast" else quality  # the pro image model holds identity far better
+        model = IMAGE_MODELS.get(quality, IMAGE_MODELS["best"])
     editing = bool(source_artifact_id)
     if editing:
         parts.append(_image_part(source_artifact_id))
     aid = source_artifact_id or "art_" + uuid.uuid4().hex[:10]
-    if not editing:
+    if not editing and show:
         _progress("image_generate", aid, "image", prompt, model=model)
     cfg: dict[str, Any] = {"responseModalities": ["TEXT", "IMAGE"]}
     ar = aspect_ratio.strip()
@@ -120,7 +128,7 @@ def image_generate(prompt: str, aspect_ratio: str = "", source_artifact_id: str 
         data = base64.b64decode(out[-1]["inlineData"]["data"])
         mime = out[-1]["inlineData"].get("mimeType") or "image/png"
     except Exception as e:
-        if not editing:
+        if not editing and show:
             _failed("image_generate", aid, "image", prompt, str(e))
         raise
     if editing:
@@ -133,7 +141,8 @@ def image_generate(prompt: str, aspect_ratio: str = "", source_artifact_id: str 
         ext = ".jpg" if ext in (".jpe", ".jpeg") else ext
         m = AR.save_upload(filename or f"{_slug(prompt)}{ext}", data, mime, aid=aid, source="generated",
                            note=f"Generated: {prompt[:150]}")
-    AR._show("image_generate", {"prompt": prompt[:200]}, m)
+    if show:
+        AR._show("image_generate", {"prompt": prompt[:200]}, m)
     return {**AR.brief(m), "model": model, "model_note": note[:300] or None,
             "shown": "the image is on screen; describe it briefly, don't read out the prompt"}
 
@@ -168,7 +177,7 @@ def _save_job(job: dict) -> None:
 
 
 def video_generate(prompt: str, aspect_ratio: str = "16:9", duration_s: int = 8, image_artifact_id: str = "",
-                   quality: str = "fast", filename: str = "") -> dict:
+                   quality: str = "fast", filename: str = "", subject: str = "") -> dict:
     """Start a Veo video (returns immediately; the card plays it when it's ready, usually 1-3 minutes)."""
     prompt = (prompt or "").strip()
     if not prompt:
@@ -180,8 +189,27 @@ def video_generate(prompt: str, aspect_ratio: str = "16:9", duration_s: int = 8,
         p = _image_part(image_artifact_id)["inlineData"]
         inst["image"] = {"bytesBase64Encoded": p["data"], "mimeType": p["mimeType"]}
     params = {"aspectRatio": aspect_ratio if aspect_ratio in VIDEO_RATIOS else "16:9", "durationSeconds": dur}
+    via = ""
+    if subject and not image_artifact_id:
+        from . import subjects as SJ
+        s = SJ.resolve(subject)
+        inst["prompt"] = f"{prompt}\n\n{SJ.ref_text(s)}"
+        # Veo 3.1 "asset" reference images keep his real car's identity through the clip (16:9, 8 s, full model).
+        inst["referenceImages"] = [{"image": {"bytesBase64Encoded": base64.b64encode(b).decode(), "mimeType": mt},
+                                    "referenceType": "asset"} for b, mt in SJ.photos(s)]
+        model, dur, params = VIDEO_MODELS["best"], 8, {"aspectRatio": "16:9", "durationSeconds": 8}
+        via = "reference_images"
     r = httpx.post(f"{API}/models/{model}:predictLongRunning", headers=_h(), timeout=60,
                    json={"instances": [inst], "parameters": params})
+    if r.status_code == 400 and via:
+        # References unsupported here: render a still of HIS car in the scene, then animate that frame.
+        still = image_generate(f"Opening frame of a video: {prompt}", aspect_ratio=params["aspectRatio"],
+                               subject=subject, show=False)
+        p = _image_part(still["id"])["inlineData"]
+        inst = {"prompt": inst["prompt"], "image": {"bytesBase64Encoded": p["data"], "mimeType": p["mimeType"]}}
+        model, via = VIDEO_MODELS.get(quality, VIDEO_MODELS["fast"]), "first_frame"
+        r = httpx.post(f"{API}/models/{model}:predictLongRunning", headers=_h(), timeout=60,
+                       json={"instances": [inst], "parameters": params})
     if r.status_code != 200:
         raise RuntimeError(_err(r))
     aid = "art_" + uuid.uuid4().hex[:10]
@@ -192,7 +220,7 @@ def video_generate(prompt: str, aspect_ratio: str = "16:9", duration_s: int = 8,
     _progress("video_generate", aid, "video", prompt, model=model, duration=dur, aspect=params["aspectRatio"],
               eta_s=90 if "lite" in model or "fast" in model else 150)
     _spawn(job)
-    return {"started": True, "artifact_id": aid, "model": model, "duration_s": dur,
+    return {"started": True, "artifact_id": aid, "model": model, "duration_s": dur, "subject_via": via or None,
             "note": "Generating in the background (usually 1-3 minutes). A progress display is on screen and turns into "
                     "the video when it's ready. Don't wait for it or call anything else; just tell him it's underway."}
 

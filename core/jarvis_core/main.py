@@ -27,7 +27,7 @@ from .audio import MicPipeline, WakeWord
 from .briefing import briefing
 from .config import settings
 from .hermes_client import HermesClient
-from .session import Session, classify_confirmation
+from .session import Session, classify_confirmation, classify_forge
 from .voice import Voice, pcm16_to_wav
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -113,8 +113,25 @@ async def upload(request: Request, files: list[UploadFile] = File(...)):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     out, errors = [], []
     for f in files[:20]:
-        data = await f.read(artifacts.MAX_UPLOAD + 1)
         try:
+            if artifacts.is_video_name(f.filename or ""):
+                # videos can be GBs: stream to disk in chunks, then move into the sandbox
+                tmp = artifacts.ART_DIR / f".up_{secrets.token_hex(6)}"
+                tmp.parent.mkdir(parents=True, exist_ok=True)
+                total = 0
+                with open(tmp, "wb") as fh:
+                    while chunk := await f.read(8 * 1024 * 1024):
+                        total += len(chunk)
+                        if total > artifacts.MAX_VIDEO_UPLOAD:
+                            break
+                        fh.write(chunk)
+                try:
+                    m = await asyncio.to_thread(artifacts.save_upload_file, f.filename or "video.mp4", tmp, f.content_type)
+                finally:
+                    tmp.unlink(missing_ok=True)
+                out.append({"id": m["id"], "filename": m["filename"], "kind": m["kind"], "size": m["size"]})
+                continue
+            data = await f.read(artifacts.MAX_UPLOAD + 1)
             m = await asyncio.to_thread(artifacts.save_upload, f.filename or "upload", data, f.content_type)
             out.append({"id": m["id"], "filename": m["filename"], "kind": m["kind"], "size": m["size"]})
         except Exception as e:
@@ -136,15 +153,35 @@ async def garage_file(doc_id: str, request: Request):
     return FileResponse(path, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
 
 
-@app.get("/artifact/{artifact_id}/raw")
-async def artifact_raw(artifact_id: str, request: Request, v: int = 0):
+@app.get("/artifact/{artifact_id}/thumb/{i}")
+async def artifact_thumb(artifact_id: str, i: int, request: Request):
     if not _authorized(request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
+    from jarvis_google import video
+    p = video.thumb_path(artifact_id, i) if re.fullmatch(r"art_[0-9a-f]{10}", artifact_id) else None
+    if not p:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(p, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.get("/artifact/{artifact_id}/raw")
+async def artifact_raw(artifact_id: str, request: Request, v: int = 0, proxy: int = 0):
+    if not _authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if proxy and re.fullmatch(r"art_[0-9a-f]{10}", artifact_id):
+        from jarvis_google import video
+        p = video.proxy_path(artifact_id)
+        if p:  # the H.264 copy every format plays as (HEVC / AVI / WMV / MKV ... don't play in the HUD)
+            return FileResponse(p, media_type="video/mp4", headers={"Cache-Control": "no-store"})
     try:
         path, mime = artifacts.raw_path(artifact_id, v or None)
     except (ValueError, FileNotFoundError):
         return JSONResponse({"error": "not found"}, status_code=404)
-    return FileResponse(path, media_type=mime, headers={"Cache-Control": "no-store"})
+    headers = {"Cache-Control": "no-store"}
+    if request.headers.get("origin") == "null":
+        # The HUD (file:// => Origin "null") samples generated images into canvas particles; only it gets CORS.
+        headers["Access-Control-Allow-Origin"] = "null"
+    return FileResponse(path, media_type=mime, headers=headers)
 
 
 @app.websocket("/ws")
@@ -200,7 +237,8 @@ async def ws_endpoint(ws: WebSocket):
         await send({"type": "transcript", "text": text, "via": via})
         answering = session.briefing_question is not None and not session.briefing_question.done()
         # A confirm card is waiting: a short "yes" / "delete it" / "cancel" is his answer, never room noise.
-        confirming = bool(store.pending_actions() or session.approvals) and classify_confirmation(text) is not None
+        confirming = (bool(store.pending_actions() or session.approvals) and classify_confirmation(text) is not None) \
+            or (session.forge_pending and classify_forge(text) is not None)
         if confirming or not is_noise_transcript(text, via):
             await session.user_input(text, source="voice")
         elif answering:
@@ -279,6 +317,22 @@ async def ws_endpoint(ws: WebSocket):
                 await mic.set_listening(bool(data.get("enabled", True)))
             elif t == "speaking_audio":
                 mic.suspended = bool(data.get("playing"))  # avoid self-triggering the wake word
+            elif t == "forge_state":
+                # The HUD's hologram is showing a generated image/video: listen for "keep it" / "lose it".
+                session.forge_pending = bool(data.get("pending"))
+                if session.forge_pending and mic.wake_enabled and mic.wake.available:
+                    cancel_follow_up()
+                    async def forge_listen():
+                        try:
+                            for _ in range(60):  # let JARVIS finish speaking first
+                                if session._state == "idle" and not session._busy() and mic.mode == "wake":
+                                    break
+                                await asyncio.sleep(0.25)
+                            if session.forge_pending and mic.mode == "wake":
+                                await mic.listen_follow_up(CONFIRM_LISTEN_S)
+                        except asyncio.CancelledError:
+                            pass
+                    follow_up_task = asyncio.create_task(forge_listen())
             elif t == "playback_done":
                 cancel_follow_up()
                 was_speaking = session._state in ("speaking", "confirm") and not session._busy()
@@ -309,13 +363,29 @@ async def ws_endpoint(ws: WebSocket):
                           "crypto_chart": markets.crypto_chart, "trade_chart": trading.chart,
                           "trade_preview": trading.preview, "trade_book": trading.orderbook,
                           "trade_history": trading.trade_history,
-                          "music_artist": media.music_artist, "music_album": media.music_album}.get(op)
+                          "music_artist": media.music_artist, "music_album": media.music_album,
+                          "music_find": media.music_find, "music_radio": media.music_radio,
+                          "music_playlist": media.music_playlist, "music_library": media.music_library,
+                          "music_auth_status": media.music_auth_status, "music_set_auth": media.music_set_auth,
+                          "music_sign_out": media.music_sign_out, "music_rate": media.music_rate,
+                          "music_like_status": media.music_like_status, "music_my_playlists": media.music_my_playlists,
+                          "music_playlist_add": media.music_playlist_add, "music_playlist_create": media.music_playlist_create,
+                          "music_playlist_remove": media.music_playlist_remove}.get(op)
                     try:
                         r = {"ok": True, "result": await asyncio.to_thread(fn, **args)} if fn else {"ok": False, "error": "operation not allowed"}
                     except Exception as e:
                         r = {"ok": False, "error": f"{e}"[:300]}
                     await send({"type": "rpc_result", "op": op, "req": req, **r})
                 asyncio.create_task(run_rpc())
+            elif t == "directions_open":
+                # Directions button / map tap on a place card: route in the HUD, not a browser.
+                async def run_directions(d=data):
+                    try:
+                        await asyncio.to_thread(routes.directions, str(d.get("destination", ""))[:300])
+                        await session._flush_feed("direct")
+                    except Exception as e:
+                        await send({"type": "toast", "text": f"Couldn't route there: {e}"[:200], "error": True})
+                asyncio.create_task(run_directions())
             elif t == "market_open":
                 async def run_market(d=data):
                     try:
@@ -372,6 +442,14 @@ async def ws_endpoint(ws: WebSocket):
                     for it in items:
                         try:
                             m = await asyncio.to_thread(artifacts._meta, str(it.get("id", "")))
+                            if m["kind"] == "video":
+                                # a video gets the video display right away and starts converting + watching
+                                from jarvis_google import video
+                                await asyncio.to_thread(store.record_result, "video_analyze", None,
+                                                        {"artifact_id": m["id"]},
+                                                        video.card_data(m["id"], {}, "preparing"))
+                                video.start_background(m["id"])
+                                continue
                             await asyncio.to_thread(store.record_result, "file_upload", None, {"artifact_id": m["id"]},
                                                     artifacts.card_data(m))
                         except Exception as e:
@@ -395,6 +473,11 @@ async def ws_endpoint(ws: WebSocket):
                                                "artifact_revert", "code_undo"):
                         session.notes.append(f"Stephen used a file/code card: {op} on {args.get('artifact_id') or args.get('change_id')}"
                                              f" -> {(r.get('result') or {}).get('text', '')} (re-read before editing it again)")
+                    if r.get("ok") and op == "artifact_discard":
+                        # He threw the generated file away: it must not linger as the "on screen" file.
+                        f = getattr(session, "focus", None)
+                        if isinstance(f, dict) and f.get("id") == args.get("artifact_id"):
+                            session.set_focus(None)
                     if r.get("ok") and op == "code_open_folder":
                         session.set_focus({"type": "project", "root": args.get("path"), "name": str(args.get("path", "")).rstrip("/").split("/")[-1]})
                         await session._flush_feed("direct")

@@ -32,7 +32,13 @@ XLSX_EXT = {".xlsx", ".xlsm"}
 CODE_EXT = {".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".rs", ".go", ".java", ".kt", ".swift", ".c", ".h",
             ".cc", ".cpp", ".hpp", ".cs", ".rb", ".php", ".sh", ".zsh", ".bash", ".sql", ".html", ".css", ".scss",
             ".json", ".yaml", ".yml", ".toml", ".ini", ".xml", ".vue", ".svelte", ".lua", ".r", ".dart", ".scala"}
-VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v"}
+# iPhone (.mov/.mp4, HEVC/HDR), Android (.mp4/.3gp/.webm/.mkv), desktop (.avi/.wmv/.flv/.mpg/.mts/...)
+VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v", ".3gp", ".3g2", ".mkv", ".avi", ".wmv", ".flv", ".mpg", ".mpeg",
+             ".m2ts", ".mts", ".ts", ".ogv", ".hevc", ".qt", ".asf", ".vob", ".divx", ".f4v"}
+MAX_VIDEO_UPLOAD = 4 * 1024 * 1024 * 1024
+VIDEO_MIME = {".mov": "video/quicktime", ".qt": "video/quicktime", ".mkv": "video/x-matroska", ".3gp": "video/3gpp",
+              ".3g2": "video/3gpp2", ".avi": "video/x-msvideo", ".wmv": "video/x-ms-wmv", ".flv": "video/x-flv",
+              ".mts": "video/mp2t", ".m2ts": "video/mp2t", ".ts": "video/mp2t", ".m4v": "video/mp4"}
 TEXT_EXT = {".txt", ".md", ".markdown", ".rst", ".log", ".svg"}
 TEXT_KINDS = {"code", "text", "csv"}
 _ID = re.compile(r"^art_[0-9a-f]{10}$")
@@ -111,6 +117,29 @@ def _new_version(m: dict, data: bytes, source: str, note: str) -> dict:
     if source != "upload":
         store.audit({"kind": "artifact_version", "artifact": m["id"], "filename": m["filename"], "version": n,
                      "source": source, "note": note[:200]})
+    return m
+
+
+def is_video_name(filename: str) -> bool:
+    return Path(str(filename or "")).suffix.lower() in VIDEO_EXT
+
+
+def save_upload_file(filename: str, src: Path, mime: str | None = None) -> dict:
+    """Big uploads (videos) streamed to a temp file first: moved into the sandbox instead of held in memory."""
+    if src.stat().st_size > MAX_VIDEO_UPLOAD:
+        raise ValueError(f"file is larger than {MAX_VIDEO_UPLOAD // (1024 ** 3)} GB")
+    name = _clean_name(filename)
+    ext = Path(name).suffix.lower()
+    aid = "art_" + uuid.uuid4().hex[:10]
+    (ART_DIR / aid).mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), ART_DIR / aid / f"v1{ext}")
+    size = (ART_DIR / aid / f"v1{ext}").stat().st_size
+    m = {"id": aid, "filename": name, "ext": ext, "kind": kind_of(name),
+         "mime": VIDEO_MIME.get(ext) or (mime if mime and mime != "application/octet-stream" else None)
+         or mimetypes.guess_type(name)[0] or "application/octet-stream",
+         "created_at": time.time(), "updated_at": time.time(), "size": size,
+         "versions": [{"n": 1, "file": f"v1{ext}", "ts": time.time(), "source": "upload", "note": "original", "size": size}]}
+    _save_meta(m)
     return m
 
 
@@ -630,5 +659,19 @@ def click_revert(artifact_id: str) -> dict:
     return {**click_get(artifact_id), "text": "Undone."}
 
 
-CLICK_OPS = {"artifact_get": click_get, "artifact_save_text": click_save_text, "artifact_sheet_set": click_sheet_set,
+def click_discard(artifact_id: str) -> dict:
+    """Click-only: he dismissed a freshly generated image/video in the center hologram. Only JARVIS-generated,
+    never-edited files qualify (his uploads and edited files are refused). Moved to a trash dir, not hard-deleted."""
+    m = _meta(artifact_id)
+    vs = m.get("versions") or []
+    if len(vs) != 1 or vs[0].get("source") != "generated":
+        raise ValueError("only an unedited JARVIS-generated file can be discarded")
+    trash = store.STATE_DIR / "artifacts_trash"
+    trash.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(_dir(artifact_id)), trash / f"{artifact_id}-{int(time.time())}")
+    store.audit({"kind": "artifact_discard", "artifact": artifact_id, "filename": m["filename"], "source": "artifact_click"})
+    return {"text": f"Discarded {m['filename']}.", "artifact_id": artifact_id}
+
+
+CLICK_OPS = {"artifact_get": click_get, "artifact_discard": click_discard, "artifact_save_text": click_save_text, "artifact_sheet_set": click_sheet_set,
              "artifact_image_op": click_image_op, "artifact_revert": click_revert, "artifact_export": export}

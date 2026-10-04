@@ -213,6 +213,10 @@ class CoreLink {
           at: Date.now(),
         });
         break;
+      case "forge_action":
+        // Spoken "keep it" / "lose it" for the center hologram.
+        window.dispatchEvent(new CustomEvent("jarvis:forge", { detail: m.action }));
+        break;
       case "card": {
         const c = this.card(m.card, m.turn_id);
         if (c.kind === "media_control") {
@@ -225,6 +229,20 @@ class CoreLink {
           for (const x of useStore.getState().cards.filter((x) => x.kind === c.kind)) s.removeCard(x.id);
         }
         const key = c.data?.key;
+        // Generated images/videos materialize in the orb first (HoloForge); he accepts or dismisses them there.
+        if (c.kind === "generating" && key) {
+          const g = c.data.generating || {};
+          const f = useStore.getState().forge;
+          s.set({ forge: { key, kind: g.kind === "video" ? "video" : "image", prompt: g.prompt || "", aspect: g.aspect,
+            started: (g.started ? g.started * 1000 : f && f.key === key ? f.started : Date.now()),
+            eta: (g.eta_s ?? (g.kind === "video" ? 90 : 15)) * 1000, error: g.error, result: undefined } });
+          break;
+        }
+        const fg = useStore.getState().forge;
+        if (key && fg && fg.key === key && c.kind === "artifact") {
+          s.set({ forge: { ...fg, result: c } });
+          break;
+        }
         const same = key ? useStore.getState().cards.find((x) => x.data?.key === key) : undefined;
         if (same) {
           // The same file / project re-rendered after an edit: refresh that display in place, don't stack copies.
@@ -393,6 +411,14 @@ class CoreLink {
     if (!this.cfg) return "";
     return `${this.cfg.httpUrl}/garage/file/${encodeURIComponent(id)}?token=${encodeURIComponent(this.cfg.token)}`;
   }
+  videoUrl(id: string): string {
+    if (!this.cfg) return "";
+    return `${this.cfg.httpUrl}/artifact/${id}/raw?proxy=1&token=${encodeURIComponent(this.cfg.token)}`;
+  }
+  videoThumbUrl(id: string, i: number): string {
+    if (!this.cfg) return "";
+    return `${this.cfg.httpUrl}/artifact/${id}/thumb/${i}?token=${encodeURIComponent(this.cfg.token)}`;
+  }
   artifactUrl(id: string, version: number): string {
     if (!this.cfg) return "";
     return `${this.cfg.httpUrl}/artifact/${id}/raw?v=${version}&token=${encodeURIComponent(this.cfg.token)}`;
@@ -472,6 +498,11 @@ class CoreLink {
   }
 
   /** Click on a ticker anywhere in a market card: Core builds the full stock / crypto card and pushes it. */
+  /** Route to a place inside the HUD: Core computes it and pushes a directions card. */
+  openDirections(destination: string): void {
+    this.send({ type: "directions_open", destination });
+  }
+
   openMarket(symbol: string, kind: "stock" | "crypto" = "stock"): void {
     this.send({ type: "market_open", symbol, kind });
   }

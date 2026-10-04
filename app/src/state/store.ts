@@ -41,6 +41,8 @@ interface Store {
   /** Sleep mode (dimmed HUD) and the moment the power-on sequence started (ms since epoch, 0 = not playing). */
   asleep: boolean;
   powerOnAt: number;
+  /** An image/video being generated "in" the orb (center hologram) until he accepts or dismisses it. */
+  forge: Forge | null;
   set: (p: Partial<Store>) => void;
   addMessage: (m: Message) => void;
   upsertJarvis: (turnId: string, text: string, final?: boolean, extra?: Partial<Message>) => void;
@@ -50,6 +52,11 @@ interface Store {
   addTool: (t: ToolEvent) => void;
   clearTurn: () => void;
 }
+
+export type Forge = {
+  key: string; kind: "image" | "video"; prompt: string; started: number; eta: number; aspect?: string;
+  error?: string; result?: Card;
+};
 
 const MAX_CARDS = 18;
 
@@ -86,6 +93,7 @@ export const useStore = create<Store>((set, get) => ({
   telemetry: null,
   sessionId: "",
   expandedCardId: null,
+  forge: null,
   attachments: [],
   uploading: 0,
   dropActive: false,

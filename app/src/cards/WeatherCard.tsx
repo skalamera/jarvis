@@ -81,8 +81,12 @@ function HourlyCurve({ hours, unit }: { hours: any[]; unit: string }) {
   }).join(" ");
   const area = `${line} L${pts[pts.length - 1].x},${H - bottom} L${pts[0].x},${H - bottom} Z`;
   const every = 3;
+  // Lines/areas live in a stretchable SVG; dots and labels are HTML positioned in %, so they never
+  // distort when the card is wide (e.g. maximized).
+  const L = (x: number) => `${(x / W) * 100}%`, T = (y: number) => `${(y / H) * 100}%`;
   return (
-    <svg className="wx-curve" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+    <div className="wx-curve">
+    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
       <defs>
         <linearGradient id="wxfill" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="var(--cy)" stopOpacity="0.35" />
@@ -93,17 +97,18 @@ function HourlyCurve({ hours, unit }: { hours: any[]; unit: string }) {
         <rect key={`r${i}`} className="wx-pop" x={p.x - 5} width="10" y={H - bottom - (p.pop / 100) * 34} height={(p.pop / 100) * 34} />
       ))}
       <path d={area} fill="url(#wxfill)" />
-      <path d={line} className="wx-line" />
-      {pts.map((p, i) => i % every === 0 && (
-        <g key={i}>
-          <circle cx={p.x} cy={p.y} r={i === 0 ? 3.5 : 2.2} className={i === 0 ? "wx-dot now" : "wx-dot"} />
-          <text x={p.x} y={p.y - 8} className="wx-t">{p.temp}°</text>
-          <text x={p.x} y={H - 16} className="wx-h">{i === 0 ? "Now" : hourLabel(p.time)}</text>
-          {p.pop >= 20 && <text x={p.x} y={H - 4} className="wx-p">{p.pop}%</text>}
-        </g>
-      ))}
+      <path d={line} className="wx-line" vectorEffect="non-scaling-stroke" />
       <title>{`Next 24 hours (${unit})`}</title>
     </svg>
+      {pts.map((p, i) => i % every === 0 && (
+        <span key={i}>
+          <i className={i === 0 ? "wx-dot now" : "wx-dot"} style={{ left: L(p.x), top: T(p.y) }} />
+          <b className="wx-t" style={{ left: L(p.x), top: T(p.y - 8) }}>{p.temp}°</b>
+          <b className="wx-h" style={{ left: L(p.x), top: T(H - 16) }}>{i === 0 ? "Now" : hourLabel(p.time)}</b>
+          {p.pop >= 20 && <b className="wx-p" style={{ left: L(p.x), top: T(H - 4) }}>{p.pop}%</b>}
+        </span>
+      ))}
+    </div>
   );
 }
 

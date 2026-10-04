@@ -9,6 +9,8 @@ import { fmtEventTime } from "../cards/format";
 import { Reactor } from "./Reactor";
 import { AttachChips, AttachControls, DropZone, Workbench } from "./Workbench";
 import { Briefing } from "./Briefing";
+import { media, fmtTime } from "../media/bus";
+import { HoloForge } from "./HoloForge";
 
 const STATE_TEXT: Record<string, string> = {
   idle: "STANDING BY",
@@ -107,6 +109,46 @@ function ActivityFeed() {
         ))}
       </AnimatePresence>
       {!visible.length && <div className="muted small">{hud === "thinking" ? "Engaging…" : "All systems nominal."}</div>}
+    </div>
+  );
+}
+
+/** Compact now-playing strip in the left column while the music card is alive. Its buttons drive the
+ *  card's own player (no second iframe); tapping the title jumps to the full card on Displays. */
+function MiniPlayer() {
+  const [np, setNp] = useState(media.nowPlaying);
+  useEffect(() => media.subscribeNowPlaying(() => setNp(media.nowPlaying)), []);
+  if (!np) return null;
+  const pct = np.duration ? Math.min(100, (np.time / np.duration) * 100) : 0;
+  const reveal = () => {
+    useStore.getState().set({ rightTab: "displays", displaysUnseen: 0 });
+    requestAnimationFrame(() => document.querySelector(`[data-card-id="${np.cardId}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
+  return (
+    <div className={`mini-player ${np.playing ? "on" : ""}`}>
+      <div className="mp-row">
+        <button className="mp-art" title="Show player" onClick={reveal} style={{ backgroundImage: np.art ? `url("${np.art}")` : undefined }} />
+        <button className="mp-meta" title="Show player" onClick={reveal}>
+          <span className="mp-lbl">{np.playing ? "NOW PLAYING" : "PAUSED"}</span>
+          <span className="mp-title">{np.title}</span>
+          <span className="mp-artist">{np.artist}</span>
+        </button>
+        <button className="mp-max" title="Maximize player" onClick={() => {
+          // The full card lives on Displays; show that tab first so the fixed overlay isn't inside a hidden panel.
+          useStore.getState().set({ rightTab: "displays", displaysUnseen: 0 });
+          requestAnimationFrame(() => np.expand());
+        }}>⤢</button>
+      </div>
+      <div className="mp-bar" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); np.seek(((e.clientX - r.left) / r.width) * np.duration); }}>
+        <i style={{ width: `${pct}%` }} />
+      </div>
+      <div className="mp-ctl">
+        <span className="mp-t">{fmtTime(np.time)}</span>
+        <button title="Previous" onClick={np.previous}>⏮</button>
+        <button className="mp-play" title={np.playing ? "Pause" : "Play"} onClick={np.toggle}>{np.playing ? "❚❚" : "▶"}</button>
+        <button title="Next" onClick={np.next}>⏭</button>
+        <span className="mp-t">{fmtTime(np.duration)}</span>
+      </div>
     </div>
   );
 }
@@ -319,32 +361,41 @@ function Caption() {
 }
 
 const RIGHT_KEY = "jarvis.rightWidth";
+const LEFT_KEY = "jarvis.leftWidth";
 const CENTER_MIN = 520; // keep the reactor + conversation usable
-const clampRight = (w: number) => {
-  const left = document.querySelector("aside.left")?.getBoundingClientRect().width ?? 250;
-  return Math.round(Math.max(340, Math.min(w, window.innerWidth - left - CENTER_MIN)));
+type Side = "left" | "right";
+const SIDES: Record<Side, { key: string; cssVar: string; min: number; other: string }> = {
+  right: { key: RIGHT_KEY, cssVar: "--right-w", min: 340, other: "aside.left" },
+  left: { key: LEFT_KEY, cssVar: "--left-w", min: 220, other: "aside.right" },
+};
+/** Clamp a side panel so the centre column keeps at least CENTER_MIN px next to the other panel. */
+const clampSide = (side: Side, w: number) => {
+  const s = SIDES[side];
+  const other = document.querySelector(s.other)?.getBoundingClientRect().width ?? (side === "right" ? 250 : 380);
+  return Math.round(Math.max(s.min, Math.min(w, window.innerWidth - other - CENTER_MIN)));
 };
 
-/** Restore the saved right-panel width (px) into the --right-w CSS variable. */
-function applyRightWidth(w: number | null) {
+/** Restore a saved side-panel width (px) into its CSS variable (--left-w / --right-w). */
+function applySideWidth(side: Side, w: number | null) {
   const root = document.documentElement;
-  if (w == null) root.style.removeProperty("--right-w");
-  else root.style.setProperty("--right-w", `${clampRight(w)}px`);
+  if (w == null) root.style.removeProperty(SIDES[side].cssVar);
+  else root.style.setProperty(SIDES[side].cssVar, `${clampSide(side, w)}px`);
 }
-{
-  const saved = Number(localStorage.getItem(RIGHT_KEY));
-  if (saved > 0) applyRightWidth(saved);
+for (const side of ["left", "right"] as Side[]) {
+  const saved = Number(localStorage.getItem(SIDES[side].key));
+  if (saved > 0) applySideWidth(side, saved);
 }
 
-/** Drag handle on the right panel's left edge. Drag to resize, double-click to reset. */
-function PanelResizer() {
+/** Drag handle on a side panel's inner edge. Drag to resize, double-click to reset. */
+function PanelResizer({ side = "right" }: { side?: Side }) {
+  const cfg = SIDES[side];
   const [drag, setDrag] = useState(false);
   const d = useRef<{ x0: number; moved: boolean } | null>(null);
   useEffect(() => {
-    const onWin = () => { const s = Number(localStorage.getItem(RIGHT_KEY)); if (s > 0) applyRightWidth(s); };
+    const onWin = () => { const s = Number(localStorage.getItem(cfg.key)); if (s > 0) applySideWidth(side, s); };
     window.addEventListener("resize", onWin);
     return () => window.removeEventListener("resize", onWin);
-  }, []);
+  }, [side]);
   const start = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -358,16 +409,40 @@ function PanelResizer() {
     if (!s) return;
     if (!s.moved && Math.abs(e.clientX - s.x0) < 3) return; // a click / double-click is not a resize
     s.moved = true;
-    const w = clampRight(window.innerWidth - e.clientX);
-    applyRightWidth(w);
-    localStorage.setItem(RIGHT_KEY, String(w));
+    const w = clampSide(side, side === "right" ? window.innerWidth - e.clientX : e.clientX);
+    applySideWidth(side, w);
+    localStorage.setItem(cfg.key, String(w));
   };
-  const end = () => { d.current = null; setDrag(false); document.body.classList.remove("resizing"); };
+  // Always clear the drag state, even if the pointer is released off the handle / outside the window or
+  // capture is lost; otherwise body.resizing keeps forcing the col-resize cursor everywhere.
+  const end = (e?: React.PointerEvent) => {
+    const el = e?.currentTarget as HTMLElement | undefined;
+    if (el && e && el.hasPointerCapture?.(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    d.current = null;
+    setDrag(false);
+    document.body.classList.remove("resizing");
+  };
+  useEffect(() => {
+    if (!drag) return;
+    const stopAll = () => end();
+    window.addEventListener("pointerup", stopAll, true);
+    window.addEventListener("blur", stopAll);
+    return () => { window.removeEventListener("pointerup", stopAll, true); window.removeEventListener("blur", stopAll); };
+  }, [drag]);
+  useEffect(() => () => document.body.classList.remove("resizing"), []);
   return (
-    <div className={`panel-resizer ${drag ? "on" : ""}`} title="Drag to resize · double-click to reset"
-      onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end}
-      onDoubleClick={() => { localStorage.removeItem(RIGHT_KEY); applyRightWidth(null); }} />
+    <div className={`panel-resizer pr-${side} ${drag ? "on" : ""}`} title="Drag to resize · double-click to reset"
+      onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onLostPointerCapture={() => end()}
+      onDoubleClick={() => { localStorage.removeItem(cfg.key); applySideWidth(side, null); }} />
   );
+}
+
+/** Orb caption; reads "♪ NOW PLAYING" while the orb is the music visualizer (playing + otherwise idle). */
+function StateLabel({ hud }: { hud: string }) {
+  const [playing, setPlaying] = useState(!!media.nowPlaying?.playing);
+  useEffect(() => media.subscribeNowPlaying(() => setPlaying(!!media.nowPlaying?.playing)), []);
+  const music = playing && hud === "idle";
+  return <div className={`state-label st-${hud} ${music ? "st-music" : ""}`}>{music ? "♪ NOW PLAYING" : STATE_TEXT[hud]}</div>;
 }
 
 export function Hud() {
@@ -391,14 +466,17 @@ export function Hud() {
       </header>
       <StatusBar />
       <aside className="left">
+        <PanelResizer side="left" />
         <Telemetry />
         <ActivityFeed />
+        <MiniPlayer />
       </aside>
       <main className="center">
         <div className="stage">
           <div className="reactor-wrap">
             <Reactor />
-            <div className={`state-label st-${hud}`}>{STATE_TEXT[hud]}</div>
+            <StateLabel hud={hud} />
+            <HoloForge />
           </div>
           <Caption />
         </div>
@@ -406,7 +484,7 @@ export function Hud() {
         <Composer />
       </main>
       <aside className="right">
-        <PanelResizer />
+        <PanelResizer side="right" />
         <RightPanel />
       </aside>
       <Toasts />
@@ -542,21 +620,22 @@ function RightPanel() {
           }}>CLEAR</button>
         )}
       </div>
-      {tab === "briefing" ? (
+      {tab === "briefing" && (
         <div className="cards">
           <AnimatePresence initial={false}>
             {pending.map((c, i) => <HoloCard key={c.id} card={c} index={i} />)}
           </AnimatePresence>
           <Briefing />
         </div>
-      ) : (
-        <div className="cards" ref={displaysRef}>
-          <AnimatePresence initial={false}>
-            {cards.map((c, i) => <HoloCard key={c.id} card={c} index={i} />)}
-          </AnimatePresence>
-          {!cards.length && <div className="cards-empty">Visual output will appear here.</div>}
-        </div>
       )}
+      {/* Displays stays MOUNTED while Briefing is shown (just hidden): unmounting it would kill the music/video
+          players (and the left mini player) whenever he glances at the briefing. */}
+      <div className="cards" ref={displaysRef} style={tab === "displays" ? undefined : { display: "none" }}>
+        <AnimatePresence initial={false}>
+          {cards.map((c, i) => <HoloCard key={c.id} card={c} index={i} />)}
+        </AnimatePresence>
+        {!cards.length && <div className="cards-empty">Visual output will appear here.</div>}
+      </div>
     </>
   );
 }

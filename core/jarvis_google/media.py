@@ -7,6 +7,7 @@ command (pause, next, volume...) for the HUD's player. Read-only: nothing here t
 """
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -33,12 +34,298 @@ def _cached(key: str, ttl: float, fn: Callable[[], Any]) -> Any:
     return val
 
 
+def _auth_path():
+    from . import store
+    return store.STATE_DIR / "ytmusic_auth.json"
+
+
 def _ytm():
+    """Signed in (his YouTube Music account) when he linked it from the music display; anonymous otherwise."""
     global _yt
     if _yt is None:
         from ytmusicapi import YTMusic
-        _yt = YTMusic()
+        ap = _auth_path()
+        try:
+            _yt = YTMusic(str(ap)) if ap.exists() else YTMusic()
+        except Exception:
+            _yt = YTMusic()
     return _yt
+
+
+def music_set_auth(cookie: str, authuser: str = "0") -> dict:
+    """Save his YouTube Music session (cookies from the in-app sign-in window). Stored outside the repo, 0600."""
+    global _yt
+    if "SAPISID" not in cookie and "__Secure-3PAPISID" not in cookie:
+        raise ValueError("That sign-in didn't finish (no Google session cookie yet).")
+    from ytmusicapi.auth.browser import setup_browser
+    from ytmusicapi.helpers import get_authorization, sapisid_from_cookie
+    origin = "https://music.youtube.com"
+    raw = "\n".join([f"cookie: {cookie}", f"x-goog-authuser: {authuser}", f"origin: {origin}",
+                     f"authorization: {get_authorization(sapisid_from_cookie(cookie) + ' ' + origin)}"])
+    ap = _auth_path()
+    ap.parent.mkdir(parents=True, exist_ok=True)
+    setup_browser(str(ap), headers_raw=raw)
+    os.chmod(ap, 0o600)
+    _yt = None
+    _cache.clear()
+    st = music_auth_status()
+    if not st["signed_in"]:
+        ap.unlink(missing_ok=True)
+        _yt = None
+        raise RuntimeError("YouTube Music didn't accept that session; try signing in again.")
+    return st
+
+
+def music_sign_out() -> dict:
+    global _yt
+    _auth_path().unlink(missing_ok=True)
+    _yt = None
+    _cache.clear()
+    return {"signed_in": False}
+
+
+def music_auth_status() -> dict:
+    if not _auth_path().exists():
+        return {"signed_in": False}
+
+    def fetch() -> dict:
+        try:
+            yt: Any = _ytm()
+            acct = yt.get_account_info()
+            return {"signed_in": True, "name": acct.get("accountName"), "handle": acct.get("channelHandle"),
+                    "photo": acct.get("accountPhotoUrl")}
+        except Exception as e:
+            return {"signed_in": False, "error": str(e)[:160]}
+    return _cached("auth_status", 600, fetch)
+
+
+def music_library() -> dict:
+    """His YouTube Music library (signed in only): playlists, liked songs, recently played."""
+    if not music_auth_status().get("signed_in"):
+        return {"signed_in": False}
+
+    def fetch() -> dict:
+        yt: Any = _ytm()
+        pls = _safe(lambda: yt.get_library_playlists(limit=25), []) or []
+        liked = _safe(lambda: yt.get_liked_songs(limit=50), {}) or {}
+        hist = _safe(lambda: yt.get_history(), []) or []
+        return {"signed_in": True,
+                "playlists": [{"id": x.get("playlistId"), "title": x.get("title", ""), "count": x.get("count"),
+                               "thumb": _thumb(x.get("thumbnails"))} for x in pls if x.get("playlistId")],
+                "liked": _dedupe([_track(t) for t in liked.get("tracks") or []]),
+                "recent": _dedupe([_track(t) for t in hist])[:25]}
+    return _cached("library", 300, fetch)
+
+
+def music_playlist(playlist_id: str) -> dict:
+    def fetch() -> dict:
+        for attempt in range(4):  # a just-created / just-edited playlist 404s for a few seconds
+            try:
+                p: Any = _ytm().get_playlist(playlist_id, limit=100)
+                break
+            except KeyError:
+                if attempt == 3:
+                    raise RuntimeError("YouTube Music is still updating that playlist; try again in a moment.")
+                time.sleep(2.5)
+        author = (p.get("author") or {}).get("name", "") if isinstance(p.get("author"), dict) else ""
+        return {"id": playlist_id, "title": p.get("title", ""), "author": author, "art": _thumb(p.get("thumbnails")),
+                "tracks": _dedupe([_track(t) for t in p.get("tracks", [])])}
+    return _cached(f"pl|{playlist_id}", 600, fetch)
+
+
+def music_find(query: str) -> dict:
+    """Search results for the music display: top result, songs, artists, albums, playlists (no playback)."""
+    q = (query or "").strip()
+    if not q:
+        return {"query": q}
+
+    def fetch() -> dict:
+        yt: Any = _ytm()
+        res = yt.search(q, limit=20) or []
+        out: dict[str, Any] = {"query": q, "top": None, "songs": [], "artists": [], "albums": [], "playlists": []}
+        for r in res:
+            rt = (r.get("resultType") or "").lower()
+            cat = (r.get("category") or "").lower()
+            item: dict | None = None
+            if rt in ("song", "video"):
+                t = _track(r)
+                if t:
+                    item = {**t, "type": rt}
+                    if len(out["songs"]) < 8:
+                        out["songs"].append(item)
+            elif rt == "artist" and (r.get("browseId") or any(a.get("id") for a in r.get("artists") or [])):
+                a0 = next((a for a in r.get("artists") or [] if a.get("id")), {})
+                nm = r.get("artist") or r.get("title") or a0.get("name") or ""
+                item = {"type": "artist", "id": r.get("browseId") or a0.get("id"), "name": nm,
+                        "thumb": _thumb(r.get("thumbnails")), "sub": r.get("subscribers")}
+                out["artists"].append(item)
+            elif rt == "album" and r.get("browseId"):
+                item = {"type": "album", "id": r["browseId"], "title": r.get("title", ""), "year": _year(r),
+                        "artist": ", ".join(a.get("name", "") for a in r.get("artists") or []),
+                        "thumb": _thumb(r.get("thumbnails")), "kind": r.get("type") or "Album"}
+                out["albums"].append(item)
+            elif rt == "playlist" and r.get("browseId"):
+                pid = r["browseId"]
+                item = {"type": "playlist", "id": pid[2:] if pid.startswith("VL") else pid, "title": r.get("title", ""),
+                        "author": r.get("author") or "", "thumb": _thumb(r.get("thumbnails"))}
+                out["playlists"].append(item)
+            if item and cat == "top result" and not out["top"]:
+                out["top"] = item
+        if not out["top"]:
+            out["top"] = (out["artists"] or out["songs"] or out["albums"] or [None])[0]
+        return out
+    return _cached(f"find|{q.lower()}", 600, fetch)
+
+
+def _need_auth() -> Any:
+    if not music_auth_status().get("signed_in"):
+        raise RuntimeError("Sign in to YouTube Music first (button on the music display).")
+    return _ytm()
+
+
+def _liked_ids() -> set[str]:
+    def fetch() -> list[str]:
+        liked = _safe(lambda: _ytm().get_liked_songs(limit=1000), {}) or {}
+        return [t["videoId"] for t in liked.get("tracks") or [] if t.get("videoId")]
+    return set(_cached("liked_ids", 300, fetch))
+
+
+def music_like_status(video_ids: list[str]) -> dict:
+    """Which of these tracks he's liked (thumbs up) on YouTube Music."""
+    if not music_auth_status().get("signed_in"):
+        return {"signed_in": False, "liked": []}
+    ids = _liked_ids()
+    return {"signed_in": True, "liked": [v for v in video_ids if v in ids]}
+
+
+def music_rate(video_id: str, rating: str = "like") -> dict:
+    """Thumbs up (like), thumbs down (dislike) or clear (none) a song on his YouTube Music account."""
+    from ytmusicapi.models.content.enums import LikeStatus
+    yt: Any = _need_auth()
+    r = {"like": LikeStatus.LIKE, "dislike": LikeStatus.DISLIKE, "none": LikeStatus.INDIFFERENT}.get(rating.lower())
+    if r is None:
+        raise ValueError("rating must be like, dislike or none")
+    yt.rate_song(video_id, r)
+    with _lock:
+        hit = _cache.get("liked_ids")
+        if hit:
+            ids = set(hit[1])
+            (ids.add if r == LikeStatus.LIKE else ids.discard)(video_id)
+            _cache["liked_ids"] = (hit[0], list(ids))
+        _cache.pop("library", None)
+    return {"video_id": video_id, "rating": rating.lower()}
+
+
+def music_my_playlists() -> dict:
+    """His own (editable) playlists, for "add to playlist"."""
+    yt: Any = _need_auth()
+
+    def fetch() -> list[dict]:
+        pls = _safe(lambda: yt.get_library_playlists(limit=100), []) or []
+        return [{"id": x["playlistId"], "title": x.get("title", ""), "count": x.get("count"),
+                 "thumb": _thumb(x.get("thumbnails"), big=False)}
+                for x in pls if x.get("playlistId") and x["playlistId"] not in ("LM", "SE")]
+    return {"playlists": _cached("my_playlists", 120, fetch)}
+
+
+def music_playlist_add(playlist_id: str, video_ids: list[str]) -> dict:
+    yt: Any = _need_auth()
+    r = yt.add_playlist_items(playlist_id, video_ids, duplicates=False)
+    if isinstance(r, dict) and r.get("status") not in (None, "STATUS_SUCCEEDED"):
+        msg = (((r.get("actions") or [{}])[0].get("addToToastAction") or {}).get("item") or {})
+        raise RuntimeError(f"YouTube Music: {r.get('status')}" + (f" ({msg})" if msg else ""))
+    _invalidate_playlists(playlist_id)
+    return {"playlist_id": playlist_id, "added": len(video_ids)}
+
+
+def music_playlist_create(title: str, video_ids: list[str] | None = None, description: str = "",
+                          privacy: str = "PRIVATE") -> dict:
+    yt: Any = _need_auth()
+    title = (title or "").strip()
+    if not title:
+        raise ValueError("Give the playlist a name.")
+    privacy = privacy.upper() if privacy.upper() in ("PRIVATE", "UNLISTED", "PUBLIC") else "PRIVATE"
+    pid = yt.create_playlist(title, description or "", privacy_status=privacy, video_ids=video_ids or None)
+    if not isinstance(pid, str):
+        raise RuntimeError(f"YouTube Music couldn't create the playlist: {str(pid)[:160]}")
+    _invalidate_playlists(pid)
+    return {"playlist_id": pid, "title": title, "added": len(video_ids or []), "privacy": privacy}
+
+
+def music_playlist_remove(playlist_id: str, video_id: str) -> dict:
+    yt: Any = _need_auth()
+    p = yt.get_playlist(playlist_id, limit=500)
+    rows = [{"videoId": t["videoId"], "setVideoId": t["setVideoId"]} for t in p.get("tracks") or []
+            if t.get("videoId") == video_id and t.get("setVideoId")]
+    if not rows:
+        raise ValueError("That song isn't in this playlist.")
+    yt.remove_playlist_items(playlist_id, rows)
+    _invalidate_playlists(playlist_id)
+    return {"playlist_id": playlist_id, "removed": len(rows)}
+
+
+def _invalidate_playlists(pid: str = "") -> None:
+    with _lock:
+        for k in ("my_playlists", "library", f"pl|{pid}"):
+            _cache.pop(k, None)
+
+
+def _resolve_track(query: str) -> dict:
+    hits = _ytm().search(query, filter="songs", limit=3)
+    t = next((x for x in map(_track, hits) if x), None)
+    if not t:
+        raise ValueError(f"No song matching '{query}'.")
+    return t
+
+
+def _resolve_playlist(name: str) -> dict | None:
+    want = name.lower().strip()
+    pls = music_my_playlists()["playlists"]
+    return (next((p for p in pls if p["title"].lower() == want), None)
+            or next((p for p in pls if want in p["title"].lower()), None))
+
+
+def _now_playing() -> dict | None:
+    from . import store
+    for it in reversed(store.feed_since(0)[-200:]):
+        if it.get("tool") == "music_play" and isinstance(it.get("result"), dict):
+            q = it["result"].get("queue") or []
+            return q[0] if q else None
+    return None
+
+
+def music_library_action(action: str, song: str = "", playlist: str = "", new_playlist: str = "") -> dict:
+    """Voice entry point: like / unlike / add a song to a playlist / create a playlist. song="" = what's playing."""
+    action = action.lower().strip()
+    t = None
+    if song:
+        t = _resolve_track(song)
+    elif action in ("like", "unlike", "dislike", "add"):
+        t = _now_playing()
+        if not t:
+            raise ValueError("Nothing is playing; say which song.")
+    if action in ("like", "unlike", "dislike"):
+        music_rate(t["video_id"], {"like": "like", "unlike": "none", "dislike": "dislike"}[action])
+        return {"done": action, "song": f"{t['title']} by {t['artist']}"}
+    if action == "add":
+        if new_playlist:
+            r = music_playlist_create(new_playlist, [t["video_id"]])
+            return {"done": "created_and_added", "song": t["title"], "playlist": r["title"]}
+        pl = _resolve_playlist(playlist)
+        if not pl:
+            names = [p["title"] for p in music_my_playlists()["playlists"]][:15]
+            raise ValueError(f"No playlist called '{playlist}'. His playlists: {', '.join(names)}")
+        music_playlist_add(pl["id"], [t["video_id"]])
+        return {"done": "added", "song": t["title"], "playlist": pl["title"]}
+    if action == "create":
+        r = music_playlist_create(new_playlist or playlist, [t["video_id"]] if t else None)
+        return {"done": "created", "playlist": r["title"], "with": t["title"] if t else None}
+    raise ValueError("action must be like, unlike, dislike, add or create")
+
+
+def music_radio(video_id: str) -> dict:
+    """Song radio queue starting from one track (for playing a search result)."""
+    return {"queue": _cached(f"radio|{video_id}", 1800, lambda: _song_radio({"video_id": video_id}, 40))}
 
 
 def _thumb(thumbs: list[dict] | None, big: bool = True) -> str:

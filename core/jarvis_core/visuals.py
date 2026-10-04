@@ -179,6 +179,10 @@ def cards_from_feed(item: dict) -> list[dict]:
         return [card("booking_confirmed", f"Cancelled · {r.get('name') or r.get('reference', '')}", r)]
     if tool == "booking" and r.get("category"):
         return [card("booking_confirmed", f"Booked · {r.get('name') or r.get('car') or r.get('reference', '')}", r)]
+    if tool == "video_analyze" and r.get("video"):
+        v = r["video"]
+        title = (v.get("analysis") or {}).get("title") or v.get("filename") or "Video"
+        return [card("video_analysis", title, r)]
     if tool in ("image_generate", "video_generate") and r.get("generating"):
         g = r["generating"]
         what = "Video" if g.get("kind") == "video" else "Image"

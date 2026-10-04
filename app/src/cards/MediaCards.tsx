@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import type { Card } from "../types";
 import { attachYT, embedUrl, fmtTime, media, type YTInfo } from "../media/bus";
 import { core } from "../ws/core";
+import { MaxCtx } from "./HoloCard";
 
 /* MUSIC (YouTube Music queue: art + player, progress, controls, volume, up next) and VIDEO (YouTube player +
    the other results). Both play through YouTube's embedded player; voice commands reach them via the media bus. */
@@ -15,7 +16,133 @@ const ENDED = 0, PLAYING = 1, PAUSED = 2, BUFFERING = 3;
 
 type Artist = { name: string; id?: string | null };
 type Track = { video_id: string; title: string; artist: string; artists?: Artist[]; album: string; album_id?: string | null; duration: number | null; thumb: string };
-type View = { type: "artist"; id?: string | null; name: string } | { type: "album"; id: string; title: string };
+type View = { type: "artist"; id?: string | null; name: string } | { type: "album"; id: string; title: string }
+  | { type: "search"; query: string } | { type: "playlist"; id: string; title: string } | { type: "library" };
+type Src = { mode: string; title: string; subtitle?: string };
+
+/** His likes (thumbs up), shared across the card: optimistic toggle, synced with YouTube Music. */
+const liked = new Set<string>();
+const likeSubs = new Set<() => void>();
+const likeEmit = () => likeSubs.forEach((f) => f());
+function useLiked(ids: string[], enabled: boolean) {
+  const [, force] = useState(0);
+  useEffect(() => { const f = () => force((n) => n + 1); likeSubs.add(f); return () => { likeSubs.delete(f); }; }, []);
+  const key = ids.join(",");
+  useEffect(() => {
+    if (!enabled || !ids.length) return;
+    core.rpc("music_like_status", { video_ids: ids }).then((r) => {
+      if (!r.ok) return;
+      for (const id of ids) liked.delete(id);
+      for (const id of r.result?.liked || []) liked.add(id);
+      likeEmit();
+    });
+  }, [key, enabled]);
+}
+async function toggleLike(id: string, toast: (t: { text: string; error?: boolean }) => void) {
+  const was = liked.has(id);
+  if (was) liked.delete(id); else liked.add(id);
+  likeEmit();
+  const r = await core.rpc("music_rate", { video_id: id, rating: was ? "none" : "like" });
+  if (!r.ok) {
+    if (was) liked.add(id); else liked.delete(id);
+    likeEmit();
+    toast({ text: r.error || "Couldn't update that like.", error: true });
+  }
+}
+
+function LikeBtn({ id, signedIn, size = "md" }: { id: string; signedIn: boolean; size?: "md" | "sm" }) {
+  const toast = useStore((s) => s.toast);
+  if (!signedIn) return null;
+  const on = liked.has(id);
+  return (
+    <button className={`md-like ${size} ${on ? "on" : ""}`} title={on ? "Remove like" : "Like (thumbs up)"}
+      onClick={(e) => { stop(e); toggleLike(id, toast); }}>{on ? "👍" : "👍︎"}</button>
+  );
+}
+
+/** "Add to playlist": his playlists + create new, anchored to a button. */
+function PlaylistMenu({ track, onClose }: { track: Track; onClose: () => void }) {
+  const [pls, setPls] = useState<any[] | null>(null);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState("");
+  const toast = useStore((s) => s.toast);
+  useEffect(() => { core.rpc("music_my_playlists", {}).then((r) => setPls(r.ok ? r.result.playlists : [])); }, []);
+  const add = async (p: any) => {
+    setBusy(p.id);
+    const r = await core.rpc("music_playlist_add", { playlist_id: p.id, video_ids: [track.video_id] });
+    setBusy("");
+    toast(r.ok ? { text: `Added “${track.title}” to ${p.title}.` } : { text: r.error || "Couldn't add it.", error: true });
+    if (r.ok) onClose();
+  };
+  const create = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setBusy("new");
+    const r = await core.rpc("music_playlist_create", { title: name.trim(), video_ids: [track.video_id] });
+    setBusy("");
+    toast(r.ok ? { text: `Created “${name.trim()}” with “${track.title}”.` } : { text: r.error || "Couldn't create it.", error: true });
+    if (r.ok) onClose();
+  };
+  return (
+    <div className="md-plmenu" onClick={stop}>
+      <div className="md-plmenu-h"><span>ADD TO PLAYLIST</span><button className="md-ic" onClick={onClose}>×</button></div>
+      <div className="md-plmenu-t">{track.title}</div>
+      <form className="md-plnew" onSubmit={create}>
+        <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="New playlist name" />
+        <button className="hbtn sm hbtn-cyan" disabled={!name.trim() || busy === "new"}>{busy === "new" ? "…" : "Create"}</button>
+      </form>
+      <div className="md-pllist">
+        {pls === null && <div className="muted small">Loading your playlists…</div>}
+        {pls?.length === 0 && <div className="muted small">No playlists yet.</div>}
+        {pls?.map((p) => (
+          <button key={p.id} disabled={!!busy} onClick={() => add(p)}>
+            {p.thumb ? <img src={p.thumb} alt="" referrerPolicy="no-referrer" /> : <span className="md-q-ph">♪</span>}
+            <span>{p.title}</span><em>{busy === p.id ? "adding…" : p.count ? `${p.count}` : ""}</em>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const RowCtx = createContext<{ signedIn: boolean; addTo: (t: Track) => void }>({ signedIn: false, addTo: () => {} });
+
+function RowActions({ t }: { t: Track }) {
+  const c = useContext(RowCtx);
+  if (!c.signedIn) return null;
+  return (
+    <span className="md-row-acts" onClick={stop}>
+      <LikeBtn id={t.video_id} signedIn size="sm" />
+      <button className="md-ic sm" title="Add to playlist" onClick={() => c.addTo(t)}>＋</button>
+    </span>
+  );
+}
+
+/** YouTube Music account state, shared by every music card. */
+function useYtmAccount() {
+  const [acct, setAcct] = useState<{ signed_in: boolean; name?: string; photo?: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const toast = useStore((s) => s.toast);
+  const refresh = () => core.rpc("music_auth_status", {}).then((r) => setAcct(r.ok ? r.result : { signed_in: false }));
+  useEffect(() => { refresh(); }, []);
+  const signIn = async () => {
+    if (!window.jarvis?.ytmLogin) return;
+    setBusy(true);
+    try {
+      const cookie = await window.jarvis.ytmLogin();
+      if (!cookie) return;
+      const r = await core.rpc("music_set_auth", { cookie });
+      if (r.ok) { setAcct(r.result); toast({ text: `Signed in to YouTube Music${r.result?.name ? ` as ${r.result.name}` : ""}.` }); }
+      else toast({ text: r.error || "YouTube Music sign-in failed.", error: true });
+    } finally { setBusy(false); }
+  };
+  const signOut = async () => {
+    await core.rpc("music_sign_out", {});
+    await window.jarvis?.ytmLogout?.();
+    setAcct({ signed_in: false });
+  };
+  return { acct, busy, signIn, signOut };
+}
 
 /** Artist names as links. Each opens that artist's page inside the card; playback keeps going. */
 function ArtistLinks({ t, onOpen, className }: { t: { artist: string; artists?: Artist[] }; onOpen: (v: View) => void; className?: string }) {
@@ -101,9 +228,18 @@ function Volume() {
 /* ------------------------------------------------------------------ MUSIC */
 export function MusicCard({ card }: { card: Card }) {
   const d = card.data || {};
+  const root = useRef<HTMLDivElement>(null);
+  const mx = useContext(MaxCtx);
+  const big = !!mx?.max;
+  const setBig = (b: boolean) => mx?.setMax(b);
+  const [q, setQ] = useState("");
+  const yt = useYtmAccount();
+  const [plFor, setPlFor] = useState<Track | null>(null);
+  // Expanding grows THIS card in place (HoloCard's .holo-xl, Esc / click-outside handled there), so the
+  // YouTube player iframe is never re-mounted and the song keeps playing.
   // The play queue can be swapped (tapping a song on an artist / album page) without remounting the player.
   const [queue, setQueue] = useState<Track[]>(d.queue || []);
-  const [source, setSource] = useState<{ mode: string; title: string; subtitle?: string }>({ mode: d.mode, title: d.title, subtitle: d.subtitle });
+  const [source, setSource] = useState<Src>({ mode: d.mode, title: d.title, subtitle: d.subtitle });
   const qRef = useRef(queue);
   qRef.current = queue;
   const [idx, setIdx] = useState(0);
@@ -118,7 +254,7 @@ export function MusicCard({ card }: { card: Card }) {
     setIdx(i);
     p.cmd("loadVideoById", [list[i].video_id, 0]);
   };
-  const playFrom = (list: Track[], i: number, src: { mode: string; title: string; subtitle?: string }) => {
+  const playFrom = (list: Track[], i: number, src: Src) => {
     qRef.current = list;
     setQueue(list);
     setSource(src);
@@ -137,13 +273,56 @@ export function MusicCard({ card }: { card: Card }) {
     },
   });
   const t = queue[idx] || queue[0];
-  if (!t) return <div className="fx-empty">Nothing to play.</div>;
   const playing = p.info.state === PLAYING || p.info.state === BUFFERING;
+  // Mirror the now-playing state for the left-column mini player.
+  const pRef = useRef(p);
+  pRef.current = p;
+  useEffect(() => {
+    if (!t) return;
+    media.setNowPlaying({
+      cardId: card.id, title: t.title, artist: t.artists?.map((a) => a.name).join(", ") || t.artist || "",
+      art: t.thumb || d.art, playing, time: p.info.time, duration: p.info.duration,
+      toggle: () => { const pp = pRef.current; const on = pp.info.state === PLAYING || pp.info.state === BUFFERING; if (on) pp.cmd("pauseVideo"); else { media.activate(card.id); pp.cmd("playVideo"); } },
+      expand: () => setBig(true),
+      next: () => go(idxRef.current + 1),
+      previous: () => { const pp = pRef.current; if (pp.info.time > 4) pp.cmd("seekTo", [0, true]); else go(idxRef.current - 1); },
+      seek: (s) => pRef.current.cmd("seekTo", [s, true]),
+    });
+  }, [t?.video_id, playing, Math.floor(p.info.time), p.info.duration]);
+  useEffect(() => () => media.clearNowPlaying(card.id), [card.id]);
+  if (!t) return <div className="fx-empty">Nothing to play.</div>;
   const art = t.thumb || d.art;
   const view = views[views.length - 1];
+  const signedIn = !!yt.acct?.signed_in;
+
+  const search = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const query = q.trim();
+    if (query) setViews([{ type: "search", query }]);
+  };
 
   return (
-    <div className="md md-music">
+    <RowCtx.Provider value={{ signedIn, addTo: (x) => setPlFor(x) }}>
+    <LikeSync ids={[t.video_id, ...queue.slice(idx + 1, idx + 9).map((x) => x.video_id)]} enabled={signedIn} />
+    <div className={`md md-music ${big ? "xl" : ""}`} ref={root}>
+      <div className="md-bar-top" onClick={stop}>
+        <form className="md-search" onSubmit={search}>
+          <span>⌕</span>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search songs, artists, albums, playlists" />
+          {q && <button type="button" className="md-ic" title="Clear" onClick={() => setQ("")}>×</button>}
+        </form>
+        {yt.acct?.signed_in ? (
+          <button className="md-acct" title="Your library" onClick={() => setViews([{ type: "library" }])}>
+            {yt.acct.photo ? <img src={yt.acct.photo} alt="" referrerPolicy="no-referrer" /> : <span>♪</span>}
+            <em>{yt.acct.name || "Library"}</em>
+          </button>
+        ) : (
+          <button className="hbtn sm" disabled={yt.busy || !window.jarvis?.ytmLogin} onClick={yt.signIn}
+            title="Opens Google Chrome (Google blocks sign-in inside apps). Sign in there once; JARVIS stays signed in.">
+            {yt.busy ? "Finish signing in in Chrome…" : "Sign in to YouTube Music"}</button>
+        )}
+        <button className="md-ic md-expand" title={big ? "Shrink (Esc)" : "Expand"} onClick={() => setBig(!big)}>{big ? "⤡" : "⤢"}</button>
+      </div>
       <div className="md-glow" style={{ backgroundImage: art ? `url("${art}")` : undefined }} />
       <div className="md-top">
         <div className="md-art">
@@ -165,11 +344,19 @@ export function MusicCard({ card }: { card: Card }) {
         <button className="md-play" title={playing ? "Pause" : "Play"} onClick={() => { if (playing) p.cmd("pauseVideo"); else { media.activate(card.id); p.cmd("playVideo"); } }}>{playing ? "❚❚" : "▶"}</button>
         <button className="md-ic" title="Next" onClick={() => go(idx + 1)} disabled={idx >= queue.length - 1}>⏭</button>
         <Volume />
+        {signedIn && <>
+          <LikeBtn id={t.video_id} signedIn />
+          <span className="md-plwrap">
+            <button className="md-ic md-addpl" title="Add to playlist" onClick={() => setPlFor(plFor?.video_id === t.video_id ? null : t)}>＋</button>
+          </span>
+        </>}
         <button className="hbtn sm hbtn-cyan md-open" onClick={() => open(`https://music.youtube.com/watch?v=${t.video_id}`)}>YouTube Music ↗</button>
       </div>
+      {plFor && <PlaylistMenu track={plFor} onClose={() => setPlFor(null)} />}
       {view ? (
         <BrowseView key={JSON.stringify(view)} view={view} depth={views.length} nowId={t.video_id} playing={playing}
-          onBack={() => setViews((vs) => vs.slice(0, -1))} onClose={() => setViews([])} onOpen={openView} onPlay={playFrom} />
+          onBack={() => setViews((vs) => vs.slice(0, -1))} onClose={() => setViews([])} onOpen={openView} onPlay={playFrom}
+          onSignOut={async () => { await yt.signOut(); setViews([]); }} />
       ) : queue.length > 1 && (
         <div className="md-q">
           <div className="fx-sec">UP NEXT</div>
@@ -177,6 +364,7 @@ export function MusicCard({ card }: { card: Card }) {
             <div key={x.video_id} className="md-q-row" role="button" onClick={(e) => { stop(e); go(idx + 1 + j); }}>
               {x.thumb ? <img src={x.thumb} alt="" referrerPolicy="no-referrer" onError={(e) => (e.currentTarget.style.visibility = "hidden")} /> : <span className="md-q-ph">♪</span>}
               <div><div className="md-q-t">{x.title}</div><ArtistLinks t={x} onOpen={openView} className="md-q-a" /></div>
+              <RowActions t={x} />
               <span className="md-q-d">{x.duration ? fmtTime(x.duration) : ""}</span>
             </div>
           ))}
@@ -184,34 +372,124 @@ export function MusicCard({ card }: { card: Card }) {
         </div>
       )}
     </div>
+    </RowCtx.Provider>
   );
 }
 
+function LikeSync({ ids, enabled }: { ids: string[]; enabled: boolean }) {
+  useLiked(ids, enabled);
+  return null;
+}
+
 /** Artist / album page shown inside the music card. Read-only until he taps a song: then that list becomes the queue. */
-function BrowseView({ view, depth, nowId, playing, onBack, onClose, onOpen, onPlay }: {
+function BrowseView({ view, depth, nowId, playing, onBack, onClose, onOpen, onPlay, onSignOut }: {
   view: View; depth: number; nowId: string; playing: boolean;
   onBack: () => void; onClose: () => void; onOpen: (v: View) => void;
-  onPlay: (list: Track[], i: number, src: { mode: string; title: string; subtitle?: string }) => void;
+  onPlay: (list: Track[], i: number, src: Src) => void; onSignOut: () => void;
 }) {
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState("");
   const [showAll, setShowAll] = useState(false);
   useEffect(() => {
     let live = true;
-    const req = view.type === "artist" ? core.rpc("music_artist", { artist_id: view.id || "", name: view.name }) : core.rpc("music_album", { album_id: view.id });
+    const req = view.type === "artist" ? core.rpc("music_artist", { artist_id: view.id || "", name: view.name })
+      : view.type === "album" ? core.rpc("music_album", { album_id: view.id })
+      : view.type === "search" ? core.rpc("music_find", { query: view.query })
+      : view.type === "playlist" ? core.rpc("music_playlist", { playlist_id: view.id })
+      : core.rpc("music_library", {});
     req.then((r) => { if (!live) return; if (r.ok) setData(r.result); else setErr(r.error || "Couldn't load that."); });
     return () => { live = false; };
   }, []);
   const head = (
     <div className="mb-nav" onClick={stop}>
       <button className="md-ic" onClick={onBack} title="Back">‹</button>
-      <span>{view.type === "artist" ? "ARTIST" : "ALBUM"}{depth > 1 ? ` · ${depth}` : ""}</span>
+      <span>{({ artist: "ARTIST", album: "ALBUM", search: "SEARCH", playlist: "PLAYLIST", library: "YOUR LIBRARY" } as Record<string, string>)[view.type]}{depth > 1 ? ` · ${depth}` : ""}</span>
       <span className="mb-now">{playing ? "♪ still playing" : ""}</span>
       <button className="md-ic" onClick={onClose} title="Back to Up Next">×</button>
     </div>
   );
   if (err) return <div className="mb">{head}<div className="fx-empty">{err}</div></div>;
-  if (!data) return <div className="mb">{head}<div className="fx-empty">Loading {view.type === "artist" ? view.name : view.title}…</div></div>;
+  if (!data) return <div className="mb">{head}<div className="fx-empty">{view.type === "search" ? `Searching “${view.query}”…` : view.type === "library" ? "Loading your library…" : `Loading ${view.type === "artist" ? view.name : view.title}…`}</div></div>;
+  const playSong = async (x: Track) => {
+    const r = await core.rpc("music_radio", { video_id: x.video_id });
+    const list: Track[] = r.ok && r.result?.queue?.length ? r.result.queue : [x];
+    if (list[0]?.video_id !== x.video_id) list.unshift(x);
+    onPlay(list, 0, { mode: "song", title: x.title, subtitle: x.artist });
+  };
+  if (view.type === "search") {
+    const top = data.top;
+    const empty = !top && !data.songs?.length && !data.artists?.length && !data.albums?.length;
+    const tile = (a: any) => (
+      <button key={a.type + a.id} className="mb-tile" onClick={(e) => { stop(e); onOpen(a.type === "album" ? { type: "album", id: a.id, title: a.title } : a.type === "playlist" ? { type: "playlist", id: a.id, title: a.title } : { type: "artist", id: a.id, name: a.name }); }}>
+        {a.thumb ? <img src={a.thumb} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <span className="md-q-ph">♪</span>}
+        <span className="mb-tile-t">{a.title || a.name}</span>
+        <span className="mb-tile-s">{a.type === "album" ? [a.kind, a.artist, a.year].filter(Boolean).join(" · ") : a.type === "playlist" ? a.author : a.sub ? `${a.sub} subscribers` : "Artist"}</span>
+      </button>
+    );
+    return (
+      <div className="mb">
+        {head}
+        {empty && <div className="fx-empty">Nothing on YouTube Music for “{view.query}”.</div>}
+        {top && (
+          <div className="mb-top" role="button" onClick={(e) => { stop(e); if (top.type === "song" || top.type === "video") playSong(top); else onOpen(top.type === "album" ? { type: "album", id: top.id, title: top.title } : top.type === "playlist" ? { type: "playlist", id: top.id, title: top.title } : { type: "artist", id: top.id, name: top.name }); }}>
+            {top.thumb && <img className={top.type === "artist" ? "round" : ""} src={top.thumb} alt="" referrerPolicy="no-referrer" />}
+            <div>
+              <div className="mb-kind">TOP RESULT · {String(top.type).toUpperCase()}</div>
+              <div className="mb-name">{top.title || top.name}</div>
+              <div className="mb-sub">{top.artist || top.author || (top.sub ? `${top.sub} subscribers` : "")}</div>
+            </div>
+            <span className="mb-top-go">{top.type === "song" || top.type === "video" ? "▶" : "›"}</span>
+          </div>
+        )}
+        {data.songs?.length > 0 && <><div className="fx-sec">SONGS</div><TrackList tracks={data.songs} nowId={nowId} onOpen={onOpen} onPick={(i) => playSong(data.songs[i])} /></>}
+        {data.artists?.length > 0 && <><div className="fx-sec">ARTISTS</div><div className="mb-grid round">{data.artists.slice(0, 6).map(tile)}</div></>}
+        {data.albums?.length > 0 && <><div className="fx-sec">ALBUMS</div><div className="mb-grid">{data.albums.slice(0, 8).map(tile)}</div></>}
+        {data.playlists?.length > 0 && <><div className="fx-sec">PLAYLISTS</div><div className="mb-grid">{data.playlists.slice(0, 8).map(tile)}</div></>}
+      </div>
+    );
+  }
+  if (view.type === "playlist") {
+    const tracks: Track[] = data.tracks || [];
+    const src = { mode: "playlist", title: data.title, subtitle: data.author };
+    return (
+      <div className="mb">
+        {head}
+        <div className="mb-hero">
+          {data.art && <img className="mb-cover" src={data.art} alt="" referrerPolicy="no-referrer" />}
+          <div>
+            <div className="mb-kind">PLAYLIST</div>
+            <div className="mb-name">{data.title}</div>
+            <div className="mb-sub">{[data.author, `${tracks.length} songs`].filter(Boolean).join(" · ")}</div>
+            <button className="hbtn sm hbtn-cyan" disabled={!tracks.length} onClick={(e) => { stop(e); onPlay(tracks, 0, src); }}>▶ Play</button>
+          </div>
+        </div>
+        <TrackList tracks={tracks} nowId={nowId} numbered onOpen={onOpen} onPick={(i) => onPlay(tracks, i, src)} />
+      </div>
+    );
+  }
+  if (view.type === "library") {
+    if (!data.signed_in) return <div className="mb">{head}<div className="fx-empty">Sign in to YouTube Music to see your library.</div></div>;
+    const liked: Track[] = data.liked || [], recent: Track[] = data.recent || [];
+    return (
+      <div className="mb">
+        {head}
+        {data.playlists?.length > 0 && <><div className="fx-sec">YOUR PLAYLISTS</div><div className="mb-grid">
+          {data.playlists.map((p: any) => (
+            <button key={p.id} className="mb-tile" onClick={(e) => { stop(e); onOpen({ type: "playlist", id: p.id, title: p.title }); }}>
+              {p.thumb ? <img src={p.thumb} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <span className="md-q-ph">♪</span>}
+              <span className="mb-tile-t">{p.title}</span><span className="mb-tile-s">{p.count ? `${p.count} songs` : "Playlist"}</span>
+            </button>
+          ))}
+        </div></>}
+        {liked.length > 0 && <>
+          <div className="fx-sec">LIKED SONGS <button className="mb-more" onClick={(e) => { stop(e); onPlay(liked, 0, { mode: "playlist", title: "Liked songs" }); }}>▶ Play all</button></div>
+          <TrackList tracks={liked.slice(0, 12)} nowId={nowId} onOpen={onOpen} onPick={(i) => onPlay(liked, i, { mode: "playlist", title: "Liked songs" })} />
+        </>}
+        {recent.length > 0 && <><div className="fx-sec">RECENTLY PLAYED</div><TrackList tracks={recent.slice(0, 10)} nowId={nowId} onOpen={onOpen} onPick={(i) => playSong(recent[i])} /></>}
+        <button className="mb-more" onClick={(e) => { stop(e); onSignOut(); }}>Sign out of YouTube Music</button>
+      </div>
+    );
+  }
   if (view.type === "album") {
     const tracks: Track[] = data.tracks || [];
     return (
@@ -283,6 +561,8 @@ function BrowseView({ view, depth, nowId, playing, onBack, onClose, onOpen, onPl
 }
 
 function TrackList({ tracks, nowId, numbered, onPick, onOpen }: { tracks: Track[]; nowId: string; numbered?: boolean; onPick: (i: number) => void; onOpen: (v: View) => void }) {
+  const c = useContext(RowCtx);
+  useLiked(tracks.slice(0, 50).map((x) => x.video_id), c.signedIn);
   return (
     <div className="md-q mb-list">
       {tracks.map((x, i) => (
@@ -290,6 +570,7 @@ function TrackList({ tracks, nowId, numbered, onPick, onOpen }: { tracks: Track[
           {numbered && <span className="mb-n">{x.video_id === nowId ? "♪" : i + 1}</span>}
           {x.thumb ? <img src={x.thumb} alt="" referrerPolicy="no-referrer" onError={(e) => (e.currentTarget.style.visibility = "hidden")} /> : <span className="md-q-ph">♪</span>}
           <div><div className="md-q-t">{x.title}</div><ArtistLinks t={x} onOpen={onOpen} className="md-q-a" /></div>
+          <RowActions t={x} />
           <span className="md-q-d">{x.duration ? fmtTime(x.duration) : ""}</span>
         </div>
       ))}

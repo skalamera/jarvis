@@ -56,6 +56,33 @@ _ACTION_DONE = {
 }
 
 
+# Spoken answer to a generated image/video hologram (HoloForge). LOSE is checked first ("no, delete it").
+_F_TAIL = r"(?:[, ]*(?:jarvis|please|sir|thanks|thank you|now))*[.!]?$"
+_F_OBJ = r"(?: (?:it|that|this|them|the (?:image|picture|photo|video|clip|one)))?"
+_FORGE_LOSE = re.compile(
+    r"^(?:(?:no|nope|nah)[, ]*)?(?:jarvis[, ]*)?"
+    rf"(?:lose{_F_OBJ}|delete{_F_OBJ}|dismiss{_F_OBJ}|discard{_F_OBJ}|trash{_F_OBJ}|scrap{_F_OBJ}|toss{_F_OBJ}|"
+    rf"bin{_F_OBJ}|remove{_F_OBJ}|reject{_F_OBJ}|throw{_F_OBJ} (?:away|out)|get rid of{_F_OBJ}|ditch{_F_OBJ}|"
+    r"cancel|no|nope|nah|no thanks|not that one|i don'?t like it|don'?t keep it)" + _F_TAIL, re.I)
+_FORGE_KEEP = re.compile(
+    r"^(?:(?:yes|yeah|yep|yup|sure|ok|okay)[, ]*)?(?:jarvis[, ]*)?"
+    rf"(?:keep{_F_OBJ}|accept{_F_OBJ}|confirm{_F_OBJ}|save{_F_OBJ}|approve{_F_OBJ}|add{_F_OBJ}|"
+    r"send it(?: over)?|yes|yeah|yep|yup|sure|ok|okay|approved|looks good|perfect|great|nice|i like it|love it|"
+    r"that'?s (?:good|great|perfect)|sounds good)" + _F_TAIL, re.I)
+
+
+def classify_forge(text: str) -> str | None:
+    """'keep' / 'lose' for a short spoken answer to the center hologram, else None."""
+    t = text.strip().strip("\"'").strip()
+    if len(t.split()) > 7:
+        return None
+    if _FORGE_LOSE.match(t):
+        return "lose"
+    if _FORGE_KEEP.match(t):
+        return "keep"
+    return None
+
+
 def classify_confirmation(text: str) -> str | None:
     t = text.strip().strip("\"'").strip()
     if len(t.split()) > 7:
@@ -68,7 +95,7 @@ def classify_confirmation(text: str) -> str | None:
 
 
 # Tools whose displays may land after the turn ended (rendered in the background).
-BACKGROUND_TOOLS = {"video_generate", "booking", "trade_alert", "trade_order_placed", "trade_desk", "trade_orders"}
+BACKGROUND_TOOLS = {"video_generate", "video_analyze", "booking", "trade_alert", "trade_order_placed", "trade_desk", "trade_orders"}
 
 class Session:
     def __init__(self, send: Send, hermes: HermesClient, voice: Voice):
@@ -90,6 +117,8 @@ class Session:
         self.attachments: list[dict] = []  # files uploaded since the last turn, handed to the next one
         self.focus: dict | None = None      # the file / project currently on screen (the conversation's subject)
         self._played = asyncio.Event()      # the HUD finished playing everything queued (showcase pacing)
+        self._audio_out = False             # speech sent to the HUD that it hasn't reported finished yet
+        self.forge_pending = False          # a generated image/video is waiting in the center hologram
         self._tour_pending = False          # support_model(tour=True) ran this turn: narrate the tour after the reply
         self.sleeping = False               # dimmed HUD; "Morning, Jarvis" powers it on (cinematic + daily briefing)
         self.mic: Any = None                # the MicPipeline (main.py), so sleep can switch it into sleep-word mode
@@ -242,6 +271,7 @@ class Session:
             await self.reset()
         elif t == "playback_done":
             self._played.set()
+            self._audio_out = False
             if self._state == "speaking" and not self._busy():
                 await self.state("idle")
         elif t == "showcase":
@@ -336,6 +366,14 @@ class Session:
             return
 
         pending = [a for a in store.pending_actions()]
+        # The hologram is waiting (and no confirm card outranks it): "keep it" / "lose it" answers it directly.
+        fv = classify_forge(text) if self.forge_pending and not pending else None
+        if fv:
+            await self.cancel_turn()
+            self.forge_pending = False
+            await self.send({"type": "forge_action", "action": fv})
+            await self.state("idle")
+            return
         verdict = classify_confirmation(text) if pending else None
         if verdict:
             await self.cancel_turn()
@@ -533,6 +571,10 @@ class Session:
             self.run_id = None
             if not self.speak and self._state != "confirm":
                 await self.state("idle")
+            elif self._state == "speaking" and not self._audio_out:
+                # The HUD already finished playing (playback_done arrived while the turn was still wrapping
+                # up, so it was ignored there): settle to idle instead of sticking on "speaking".
+                await self.state("idle")
 
     # ------------------------------------------------------------------ cards from the tool feed
     async def _poll_feed(self, turn_id: str, head: int) -> None:
@@ -556,6 +598,11 @@ class Session:
                 self.focus = {"type": "file", "id": a["id"], "filename": a["filename"], "kind": a["kind"]}
             for c in V.cards_from_feed(item):
                 await self.send({"type": "card", "turn_id": turn_id, "card": c})
+            if item["tool"] == "video_analyze" and res.get("announce"):
+                # a long video finished after the turn ended: say the result, and keep it for follow-ups
+                self.notes.append(f"Video analysis finished ({(res.get('video') or {}).get('filename')}): {res['announce']}")
+                if turn_id == "background" and not self.sleeping:
+                    asyncio.create_task(self.say_line(res["announce"]))
         for a in store.pending_actions():
             await self._show_action(a)
 
@@ -671,6 +718,7 @@ class Session:
                 continue
             if self._state != "confirm":
                 await self.state("speaking")
+            self._audio_out = True
             await self.send({"type": "speech", "turn_id": turn_id, "seq": seq, "text": sentence,
                              "audio": b64(audio), "mime": "audio/wav"})
             seq += 1
@@ -685,6 +733,7 @@ class Session:
             return
         line, audio = ack
         await self.state("speaking")
+        self._audio_out = True
         await self.send({"type": "speech", "turn_id": turn_id, "seq": -1, "text": line, "audio": b64(audio),
                          "mime": "audio/wav", "ack": True})
         await self.state("thinking")

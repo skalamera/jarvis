@@ -1,8 +1,13 @@
-"""Drag the right-panel resize handle with real CDP mouse events; report widths before/after, persistence, reset."""
+"""Drag a side-panel resize handle (argv[1]: right|left, default right) with real CDP mouse events; report widths before/after, persistence, reset."""
 import asyncio
 import json
 import sys
 
+SIDE = sys.argv[1] if len(sys.argv) > 1 else "right"
+SGN = 1 if SIDE == "right" else -1  # moving the pointer left widens the right panel, narrows the left one
+KEY = f"jarvis.{SIDE}Width"
+MIN = 340 if SIDE == "right" else 220
+H = f"(()=>{{const r=document.querySelector('.panel-resizer.pr-{SIDE}').getBoundingClientRect(); return JSON.stringify([r.left+r.width/2, r.top+r.height/2])}})()"
 sys.argv = ["cdp.py", "noop"]
 import cdp  # noqa: E402
 
@@ -19,10 +24,10 @@ async def main():
         async def ev(e):
             return await c.eval(e)
 
-        width = "(()=>Math.round(document.querySelector('aside.right').getBoundingClientRect().width))()"
+        width = f"(()=>Math.round(document.querySelector('aside.{SIDE}').getBoundingClientRect().width))()"
         center_w = "(()=>Math.round(document.querySelector('main.center').getBoundingClientRect().width))()"
         print("start", await ev(width), "center", await ev(center_w))
-        h = json.loads(await ev("(()=>{const r=document.querySelector('.panel-resizer').getBoundingClientRect(); return JSON.stringify([r.left+r.width/2, r.top+r.height/2])})()"))
+        h = json.loads(await ev(H))
         x, y = h
 
         async def drag(to_x):
@@ -33,26 +38,27 @@ async def main():
             await c.call("Input.dispatchMouseEvent", type="mouseReleased", x=to_x, y=y, button="left", clickCount=1)
             await asyncio.sleep(0.3)
 
-        await drag(x - 300)  # wider
-        print("after drag wider", await ev(width), "center", await ev(center_w), "saved", await ev("localStorage.getItem('jarvis.rightWidth')"))
+        await drag(x - 300 * SGN)  # wider
+        print("after drag wider", await ev(width), "center", await ev(center_w), "saved", await ev("localStorage.getItem('" + KEY + "')"))
         await ev("location.reload(), true")
         await asyncio.sleep(5)
         print("after reload (persisted)", await ev(width))
-        h = json.loads(await ev("(()=>{const r=document.querySelector('.panel-resizer').getBoundingClientRect(); return JSON.stringify([r.left+r.width/2, r.top+r.height/2])})()"))
+        h = json.loads(await ev(H))
         x, y = h
-        await drag(x + 2000)  # try to go past the minimum
-        print("drag way narrower (clamped at min 340)", await ev(width))
-        h = json.loads(await ev("(()=>{const r=document.querySelector('.panel-resizer').getBoundingClientRect(); return JSON.stringify([r.left+r.width/2, r.top+r.height/2])})()"))
+        await drag(x + 2000 * SGN)  # try to go past the minimum
+        print(f"drag way narrower (clamped at min {MIN})", await ev(width))
+        h = json.loads(await ev(H))
         x, y = h
-        await drag(x - 5000)  # try to go past the max
+        await drag(x - 5000 * SGN)  # try to go past the max
         print("drag way wider (clamped so center keeps >= 520)", await ev(width), "center", await ev(center_w))
-        h = json.loads(await ev("(()=>{const r=document.querySelector('.panel-resizer').getBoundingClientRect(); return JSON.stringify([r.left+r.width/2, r.top+r.height/2])})()"))
+        h = json.loads(await ev(H))
         await c.call("Input.dispatchMouseEvent", type="mousePressed", x=h[0], y=h[1], button="left", clickCount=1)
         await c.call("Input.dispatchMouseEvent", type="mouseReleased", x=h[0], y=h[1], button="left", clickCount=1)
         await c.call("Input.dispatchMouseEvent", type="mousePressed", x=h[0], y=h[1], button="left", clickCount=2)
         await c.call("Input.dispatchMouseEvent", type="mouseReleased", x=h[0], y=h[1], button="left", clickCount=2)
         await asyncio.sleep(0.3)
-        print("double-click reset", await ev(width), "saved", await ev("localStorage.getItem('jarvis.rightWidth')"))
+        print("double-click reset", await ev(width), "saved", await ev("localStorage.getItem('" + KEY + "')"))
+        print("stuck resizing class?", await ev("document.body.classList.contains('resizing')"))
 
 
 asyncio.run(main())

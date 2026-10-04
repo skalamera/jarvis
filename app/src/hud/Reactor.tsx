@@ -4,6 +4,7 @@ import { EffectComposer, Bloom, ChromaticAberration, Vignette } from "@react-thr
 import { BlendFunction } from "postprocessing";
 import * as THREE from "three";
 import { useStore } from "../state/store";
+import { viz } from "../media/viz";
 import type { HudState } from "../types";
 
 const PALETTE: Record<HudState, [string, string]> = {
@@ -18,9 +19,16 @@ const PALETTE: Record<HudState, [string, string]> = {
 
 /** Shared animated values, smoothed each frame (avoids React re-renders at 60fps). */
 function useDrive() {
-  const d = useRef({ level: 0, energy: 0.3, spin: 0.2, color: new THREE.Color(PALETTE.idle[0]), color2: new THREE.Color(PALETTE.idle[1]) });
+  const d = useRef({ level: 0, energy: 0.3, spin: 0.2, color: new THREE.Color(PALETTE.idle[0]), color2: new THREE.Color(PALETTE.idle[1]),
+    music: 0, beat: 0, hue: 0.55 });
+  const tmpA = useMemo(() => new THREE.Color(), []), tmpB = useMemo(() => new THREE.Color(), []);
   useFrame((_, dt) => {
     const s = useStore.getState();
+    viz.tick(dt);
+    // Music visualizer mode: music playing and JARVIS otherwise at rest (voice states keep their own look).
+    const musicOn = viz.active && !s.asleep && !s.powerOnAt && s.hud === "idle";
+    d.current.music += ((musicOn ? 1 : 0) - d.current.music) * (1 - Math.exp(-dt * 3));
+    d.current.beat = viz.beat * d.current.music;
     // power-on: 0-2.6 s charge (energy and spin climb), 2.7 s flare, then settle into the normal state
     const pt = s.powerOnAt ? (Date.now() - s.powerOnAt) / 1000 : -1;
     const powering = pt >= 0 && pt < 4.2;
@@ -37,6 +45,28 @@ function useDrive() {
     const [a, b] = PALETTE[st];
     d.current.color.lerp(new THREE.Color(a), 1 - Math.exp(-dt * 4));
     d.current.color2.lerp(new THREE.Color(b), 1 - Math.exp(-dt * 4));
+    // Fabricating an image/video in the hologram: the orb runs hot, fast and white-cyan, pulsing.
+    const fg = s.forge;
+    if (fg && !fg.result && !fg.error) {
+      const pulse = 0.45 + 0.3 * Math.sin(Date.now() / 160) + 0.15 * Math.sin(Date.now() / 47);
+      d.current.level += (pulse - d.current.level) * (1 - Math.exp(-dt * 10));
+      d.current.energy += (1.1 - d.current.energy) * (1 - Math.exp(-dt * 4));
+      d.current.spin += (2.4 - d.current.spin) * (1 - Math.exp(-dt * 3));
+      d.current.color.lerp(tmpA.set("#c9f6ff"), 1 - Math.exp(-dt * 3));
+      d.current.color2.lerp(tmpB.set("#1e8cff"), 1 - Math.exp(-dt * 3));
+    }
+    const m = d.current.music;
+    if (m > 0.001) {
+      // Hue drifts continuously and jumps a little on each beat; mids/highs push saturation and brightness.
+      d.current.hue = (d.current.hue + dt * (0.035 + viz.mid * 0.08) + viz.beat * dt * 0.9) % 1;
+      tmpA.setHSL(d.current.hue, 0.85, 0.55 + viz.high * 0.2 + viz.beat * 0.12);
+      tmpB.setHSL((d.current.hue + 0.18) % 1, 0.9, 0.32 + viz.bass * 0.15);
+      d.current.color.lerp(tmpA, m);
+      d.current.color2.lerp(tmpB, m);
+      d.current.level += (Math.min(1, viz.bass * 0.85 + viz.beat * 0.35) - d.current.level) * m * (1 - Math.exp(-dt * 20));
+      d.current.energy += (0.55 + viz.level * 0.6 - d.current.energy) * m * (1 - Math.exp(-dt * 8));
+      d.current.spin += (0.35 + viz.mid * 1.2 + viz.beat * 1.6 - d.current.spin) * m * (1 - Math.exp(-dt * 6));
+    }
   });
   return d;
 }
@@ -84,7 +114,7 @@ function Core({ d }: { d: Drive }) {
     u.uEnergy.value = d.current.energy;
     u.uColor.value.copy(d.current.color);
     u.uColor2.value.copy(d.current.color2);
-    const s = 0.62 + d.current.level * 0.2 + Math.sin(clock.elapsedTime * 1.6) * 0.012;
+    const s = 0.62 + d.current.level * 0.2 + d.current.beat * 0.07 + Math.sin(clock.elapsedTime * 1.6) * 0.012;
     mesh.current.scale.setScalar(s);
     mesh.current.rotation.y = clock.elapsedTime * 0.25;
   });
@@ -145,7 +175,15 @@ function Ticks({ d, r, count }: { d: Drive; r: number; count: number }) {
     for (let i = 0; i < count; i++) {
       const a = (i / count) * Math.PI * 2;
       const wave = 0.5 + 0.5 * Math.sin(a * 6 + t * 5 + phase[i] * 6);
-      const len = 0.03 + lvl * 0.34 * wave * (0.6 + Math.abs(phase[i])) + (i % 5 === 0 ? 0.03 : 0);
+      let len = 0.03 + lvl * 0.34 * wave * (0.6 + Math.abs(phase[i])) + (i % 5 === 0 ? 0.03 : 0);
+      const m = d.current.music;
+      if (m > 0.001) {
+        // Spectrum ring: bins mirrored left/right so bass sits at the top and bottom of the ring.
+        const half = count / 2, j = i < half ? i : count - 1 - i;
+        const bin = Math.min(viz.spectrum.length - 1, Math.floor((j / half) * viz.spectrum.length));
+        const spec = 0.02 + Math.pow(viz.spectrum[bin], 1.4) * 0.75 + d.current.beat * 0.05;
+        len = len * (1 - m) + spec * m;
+      }
       tmp.position.set(Math.cos(a) * (r + len / 2), Math.sin(a) * (r + len / 2), 0);
       tmp.rotation.z = a;
       tmp.scale.set(len, i % 5 === 0 ? 0.012 : 0.006, 1);
@@ -181,6 +219,7 @@ function Particles({ d, n = 900 }: { d: Drive; n?: number }) {
   }, [n]);
   useFrame((_, dt) => {
     pts.current.rotation.z -= dt * 0.05 * (0.5 + d.current.spin);
+    pts.current.scale.setScalar(1 + d.current.beat * 0.06);
     mat.current.color.copy(d.current.color);
     mat.current.opacity = 0.25 + d.current.energy * 0.45;
   });
@@ -219,6 +258,7 @@ function Scene() {
     const t = clock.elapsedTime;
     root.current.rotation.x = -0.18 + pointer.y * 0.06 + Math.sin(t * 0.3) * 0.02;
     root.current.rotation.y = pointer.x * 0.1 + Math.sin(t * 0.21) * 0.03;
+    root.current.scale.setScalar(1 + d.current.beat * 0.025);
   });
   return (
     <group ref={root}>
