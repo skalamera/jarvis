@@ -1,4 +1,7 @@
-import { useMemo } from "react";
+import { useContext, useMemo, useState } from "react";
+import { core } from "../ws/core";
+import { useStore } from "../state/store";
+import { MaxCtx } from "./HoloCard";
 import type { Card } from "../types";
 
 /* Weather card: hero (animated condition glyph + temp), stat strip, 24h temperature curve with rain chance,
@@ -119,9 +122,32 @@ export function WeatherCard({ card }: { card: Card }) {
   const daily: any[] = w.daily || [];
   const lo = Math.min(...daily.map((d) => d.lo)), hi = Math.max(...daily.map((d) => d.hi));
   const span = Math.max(hi - lo, 1);
+  const max = !!useContext(MaxCtx)?.max;
+  const [edit, setEdit] = useState(false);
+  const [place, setPlace] = useState("");
+  const [busy, setBusy] = useState(false);
+  const relocate = async (loc: string) => {
+    setBusy(true);
+    const r = await core.rpc("weather_at", { location: loc });
+    setBusy(false);
+    if (r.ok) { core.patchCard(card.id, r.result, r.result.location?.name ? `${r.result.location.name}${r.result.location.region ? ", " + r.result.location.region : ""}` : undefined); setEdit(false); setPlace(""); }
+    else useStore.getState().toast({ text: r.error || `Couldn't find “${loc}”`, error: true });
+  };
   const rainSoon = (w.hourly || []).slice(0, 12).find((h: any) => h.pop >= 50);
   return (
     <div className={`weather ${c.is_day ? "day" : "night"} wx-bg-${c.icon}`}>
+      <div className="wx-loc" onClick={(e) => e.stopPropagation()}>
+        {edit ? (
+          <form className="cs-bar" onSubmit={(e) => { e.preventDefault(); if (place.trim()) relocate(place.trim()); }}>
+            <div className="cs-q"><span>⌕</span><input autoFocus value={place} onChange={(e) => setPlace(e.target.value)} placeholder="City, ZIP or place" /></div>
+            <button type="submit" className="cs-go" disabled={busy}>{busy ? <span className="cx-spin" /> : "Go"}</button>
+            <button type="button" className="cs-go" title="My location" onClick={() => relocate("")}>⌖</button>
+            <button type="button" className="cs-x" onClick={() => setEdit(false)}>×</button>
+          </form>
+        ) : (
+          <button className="wx-loc-btn" onClick={() => setEdit(true)} title="Change location">📍 {w.location?.name || "Location"}{w.location?.region ? `, ${w.location.region}` : ""} <span>change</span></button>
+        )}
+      </div>
       <div className="wx-hero">
         <Glyph icon={c.icon} day={c.is_day} size={76} />
         <div className="wx-now">
@@ -156,9 +182,32 @@ export function WeatherCard({ card }: { card: Card }) {
           </div>
         ))}
       </div>
+      {max && <Radar lat={w.location?.lat} lon={w.location?.lon} />}
       <div className="wx-foot">
         {w.location?.source === "ip" ? "Approximate location · " : ""}Open-Meteo · updated {clock(w.current?.time)}
       </div>
     </div>
+  );
+}
+
+/** Live animated radar (Windy embed: precipitation radar, auto-playing loop) centred on the forecast location. */
+export function radarUrl(lat: number, lon: number, zoom = 8): string {
+  const q = new URLSearchParams({
+    lat: String(lat), lon: String(lon), detailLat: String(lat), detailLon: String(lon), zoom: String(zoom), level: "surface",
+    overlay: "radar", product: "radar", menu: "", message: "true", marker: "true", calendar: "now", pressure: "",
+    type: "map", location: "coordinates", detail: "", metricWind: "mph", metricTemp: "°F", radarRange: "-1",
+  });
+  return `https://embed.windy.com/embed.html?${q}`;
+}
+
+function Radar({ lat, lon }: { lat?: number; lon?: number }) {
+  if (lat == null || lon == null) return null;
+  return (
+    <>
+      <div className="wx-sub">LIVE RADAR</div>
+      <div className="wx-radar" onClick={(e) => e.stopPropagation()}>
+        <iframe key={`${lat},${lon}`} src={radarUrl(lat, lon)} title="Weather radar" loading="lazy" allowFullScreen />
+      </div>
+    </>
   );
 }

@@ -104,6 +104,7 @@ export function HoloCard({ card, index }: { card: Card; index: number }) {
   // Maximize grows THIS card in place (a fixed overlay via .holo-xl) rather than re-rendering it elsewhere,
   // so live content (players, maps, forms being typed into) keeps its state. Esc or a click outside restores.
   const [max, setMax] = useState(!!card.openMax);
+  useEffect(() => { if (card.openMax) setMax(true); }, [card.openMax]);
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!max) return;

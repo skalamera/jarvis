@@ -56,6 +56,63 @@ def youtube_home(n: int = 24) -> dict:
     return M._cached("ythome", 600, run)
 
 
+def _flat(url: str, n: int) -> list[dict]:
+    import yt_dlp
+    cf = _cookiefile()
+    opts: Any = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist", "skip_download": True,
+                 "playlistend": n, **({"cookiefile": cf} if cf else {})}
+    with yt_dlp.YoutubeDL(opts) as y:
+        info: Any = y.extract_info(url, download=False)
+    return [e for e in (info or {}).get("entries") or [] if e]
+
+
+def youtube_profile() -> dict:
+    """His YouTube: channel, subscriptions, recently watched, liked, watch later, his uploads (signed-in session)."""
+    from concurrent.futures import ThreadPoolExecutor
+    from . import media as M
+
+    def run() -> dict:
+        acct = M.music_auth_status()
+        if not acct.get("signed_in"):
+            return {"signed_in": False}
+        h = acct.get("handle") or ""
+        h = h if h.startswith("@") else "@" + h if h else ""
+
+        def vids(url: str, n: int = 12) -> list[dict]:
+            try:
+                return [M._video_row(e) for e in _flat(url, n) if e.get("id")]
+            except Exception:
+                return []
+
+        def subs() -> list[dict]:
+            try:
+                out = []
+                for e in _flat("https://www.youtube.com/feed/channels", 60):
+                    th = sorted(e.get("thumbnails") or [], key=lambda t: t.get("width") or 0)
+                    out.append({"name": e.get("channel") or e.get("title"), "url": e.get("channel_url") or e.get("url"),
+                                "followers": e.get("channel_follower_count"),
+                                "thumb": ("https:" + th[-1]["url"]) if th and th[-1]["url"].startswith("//") else (th[-1]["url"] if th else "")})
+                return out
+            except Exception:
+                return []
+        with ThreadPoolExecutor(6) as ex:
+            fs = {"history": ex.submit(vids, "https://www.youtube.com/feed/history"),
+                  "liked": ex.submit(vids, "https://www.youtube.com/playlist?list=LL"),
+                  "watch_later": ex.submit(vids, "https://www.youtube.com/playlist?list=WL"),
+                  "mine": ex.submit(vids, f"https://www.youtube.com/{h}/videos") if h else None,
+                  "subscriptions": ex.submit(subs)}
+            res = {k: (f.result() if f else []) for k, f in fs.items()}
+        return {"signed_in": True, "name": acct.get("name"), "handle": h, "photo": acct.get("photo"),
+                "channel_url": f"https://www.youtube.com/{h}" if h else "", **res}
+    return M._cached("ytprofile", 600, run)
+
+
+def youtube_channel(url: str) -> dict:
+    from . import media as M
+    u = url.rstrip("/") + ("" if url.rstrip("/").endswith("/videos") else "/videos")
+    return {"results": [M._video_row(e) for e in _flat(u, 24) if e.get("id")]}
+
+
 def youtube_find(query: str) -> dict:
     from . import media as M
     q = (query or "").strip()
@@ -125,5 +182,10 @@ def files(limit: int = 200) -> dict:
     return AR.file_list(limit)
 
 
-RPC = {"file_list": files, "youtube_home": youtube_home, "youtube_find": youtube_find, "music_home": music_home, "resy_find": resy_find,
+def weather_at(location: str = "") -> dict:
+    from . import weather as W
+    return W.weather(location=location, days=10)  # its return value is the card data
+
+
+RPC = {"weather_at": weather_at, "youtube_profile": youtube_profile, "youtube_channel": youtube_channel, "file_list": files, "youtube_home": youtube_home, "youtube_find": youtube_find, "music_home": music_home, "resy_find": resy_find,
        "eats_find": eats_find, "places_find": places_find, "flights_find": flights_find}

@@ -243,6 +243,18 @@ class CoreLink {
           s.set({ forge: { ...fg, result: c } });
           break;
         }
+        if (c.kind === "video" && !(this.launchAt && Date.now() - this.launchAt < 40_000) && c.data?.results?.length && !c.data?.paused) {
+          // asked to play a video: it plays over the orb; the sidebar card becomes the browse panel
+          c.data = { ...c.data, stage: "center", current: c.data.current || 0 };
+          const results = c.data.results, idx = c.data.current;
+          setTimeout(() => {
+            const vc = useStore.getState().cards.filter((x) => x.kind === "video" && x.data?.stage === "center").pop();
+            if (vc) window.dispatchEvent(new CustomEvent("jarvis:tube", { detail: { cardId: vc.id, results, idx } }));
+          }, 0);
+        }
+        if (c.kind === "weather" && !(this.launchAt && Date.now() - this.launchAt < 40_000) && c.data?.location?.lat != null) {
+          window.dispatchEvent(new CustomEvent("jarvis:radar", { detail: c.data }));  // asked by voice/text: holo radar over the orb
+        }
         if (this.launchAt && Date.now() - this.launchAt < 40_000 && c.kind !== "confirm") {
           this.launchAt = 0;
           c.openMax = true;

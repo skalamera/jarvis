@@ -11,6 +11,8 @@ import { AttachChips, AttachControls, DropZone, Workbench } from "./Workbench";
 import { Briefing } from "./Briefing";
 import { media, fmtTime } from "../media/bus";
 import { HoloForge } from "./HoloForge";
+import { HoloRadar } from "./HoloRadar";
+import { HoloTube } from "./HoloTube";
 
 const STATE_TEXT: Record<string, string> = {
   idle: "STANDING BY",
@@ -545,6 +547,8 @@ export function Hud() {
             <Reactor />
             <StateLabel hud={hud} />
             <HoloForge />
+            <HoloRadar />
+            <HoloTube />
           </div>
           <Caption />
         </div>

@@ -12,6 +12,7 @@ export interface MediaPlayer {
   previous?: () => void;
   stop: () => void;
   playing: () => boolean;
+  info?: () => unknown;
 }
 
 /** What the music card is playing, mirrored for the left-column mini player. */
@@ -129,6 +130,7 @@ class MediaBus {
 }
 
 export const media = new MediaBus();
+(window as any).jarvisMedia = media; // test hook (CDP)
 
 /** Build the embed URL. Music hides YouTube's own controls (the card has them); videos keep them. */
 export function embedUrl(videoId: string, opts: { controls?: boolean; start?: number; paused?: boolean } = {}): string {

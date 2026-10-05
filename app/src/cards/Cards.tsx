@@ -1,4 +1,6 @@
-import { useContext, useEffect, useState } from "react";
+import { MailComposer, type ComposeInit } from "./MailComposer";
+import { useContext, useEffect, useRef, useState } from "react";
+import { useStore } from "../state/store";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { core } from "../ws/core";
@@ -67,15 +69,43 @@ function TrashBtn({ account, id }: { account?: string | null; id: string }) {
 export function EmailList({ card }: { card: Card }) {
   const msgs: any[] = card.data?.messages ?? [];
   const [gone, setGone] = useState<Set<string>>(new Set());
-  if (!msgs.length) return <div className="muted">No messages match.</div>;
+  const [q, setQ] = useState(card.data?.query && card.data.query !== "in:inbox" ? card.data.query : "");
+  const [busy, setBusy] = useState(false);
+  const [compose, setCompose] = useState(false);
+  const acct = card.account || "personal";
+  const load = async (account: string, query: string) => {
+    setBusy(true);
+    const r = await core.workspace("mail_inbox", { account, query: query.trim() || "in:inbox", max_results: 25 });
+    setBusy(false);
+    if (r.ok) {
+      const s = useStore.getState();
+      s.set({ cards: s.cards.map((c) => (c.id === card.id ? { ...c, account, title: query.trim() ? `${query} · ${account}` : `Inbox · ${account}`, data: { ...r.result, query: query.trim() || "in:inbox" } } : c)) });
+      setGone(new Set());
+    } else useStore.getState().toast({ text: r.error || "Couldn't load mail.", error: true });
+  };
   return (
     <div className="list">
+      <div className="ml-bar" onClick={(e) => e.stopPropagation()}>
+        <div className="cx-toggles">
+          {["personal", "work"].map((a) => (
+            <button key={a} className={`tog ${acct === a ? "on" : ""} ml-${a}`} onClick={() => a !== acct && load(a, q)}>{a === "personal" ? "Personal" : "Work"}</button>
+          ))}
+        </div>
+        <form className="cs-q" onSubmit={(e) => { e.preventDefault(); load(acct, q); }}>
+          <span>⌕</span><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search mail (Gmail search works: from:, has:attachment…)" />
+          {busy && <span className="cx-spin" />}
+        </form>
+        <button className="cs-go" onClick={() => load(acct, q)} title="Refresh">⟳</button>
+        <button className="cs-go mc-new" onClick={() => setCompose(true)}>✎ Compose</button>
+      </div>
+      {compose && <MailComposer init={{ account: acct, mode: "new" }} onClose={() => setCompose(false)} />}
+      {!msgs.length && <div className="muted">No messages match.</div>}
       {card.data?.result_size_estimate > msgs.length && (
         <div className="list-meta">Showing {msgs.length} of ~{Number(card.data.result_size_estimate).toLocaleString()}</div>
       )}
       {msgs.filter((m) => !gone.has(m.id)).map((m, i) => (
         <div key={m.id} className={`row email-row ${m.unread ? "unread" : ""}`} style={{ animationDelay: `${i * 45}ms` }}
-          onClick={() => core.direct("gmail_read", { account: card.account, message_id: m.id })}>
+          onClick={() => core.direct("gmail_read", { account: acct, message_id: m.id })}>
           <div className="avatar">{initials(m.from_name || m.from_email)}</div>
           <div className="row-main">
             <div className="row-top">
@@ -86,9 +116,9 @@ export function EmailList({ card }: { card: Card }) {
             <div className="snippet">{m.snippet}</div>
           </div>
           <div className="row-actions" onClick={(e) => e.stopPropagation()}>
-            {m.unread && <button title="Mark read" onClick={() => { core.direct("gmail_modify", { account: card.account, message_ids: [m.id], mark_read: true }); m.unread = false; setGone(new Set(gone)); }}>✓</button>}
-            <button title="Archive" onClick={() => { core.direct("gmail_modify", { account: card.account, message_ids: [m.id], archive: true }); setGone(new Set([...gone, m.id])); }}>⇩</button>
-            <TrashIcon account={card.account} id={m.id} />
+            {m.unread && <button title="Mark read" onClick={() => { core.direct("gmail_modify", { account: acct, message_ids: [m.id], mark_read: true }); m.unread = false; setGone(new Set(gone)); }}>✓</button>}
+            <button title="Archive" onClick={() => { core.direct("gmail_modify", { account: acct, message_ids: [m.id], archive: true }); setGone(new Set([...gone, m.id])); }}>⇩</button>
+            <TrashIcon account={acct} id={m.id} />
           </div>
         </div>
       ))}
@@ -97,28 +127,61 @@ export function EmailList({ card }: { card: Card }) {
 }
 
 // ------------------------------------------------------------------------ single email
+function MailBody({ account, id, text }: { account: string; id: string; text: string }) {
+  const [html, setHtml] = useState<string | null>(null);
+  const [h, setH] = useState(240);
+  const ref = useRef<HTMLIFrameElement>(null);
+  useEffect(() => { core.workspace("mail_html", { account, message_id: id }).then((r) => setHtml(r.ok ? r.result.html : "")); }, [account, id]);
+  if (html === null) return <div className="email-body">{text}</div>;
+  if (!html) return <div className="email-body">{text}</div>;
+  return (
+    <iframe ref={ref} className="mail-html" sandbox="allow-same-origin allow-popups" style={{ height: h }} title="message"
+      srcDoc={`<base target="_blank"><style>html,body{margin:0;padding:12px;background:#fff;color:#202124;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;word-wrap:break-word}img{max-width:100%;height:auto}</style>${html}`}
+      onLoad={() => { const d = ref.current?.contentDocument; if (d) setH(Math.min(4000, d.documentElement.scrollHeight + 8)); }} />
+  );
+}
+
 export function EmailView({ card }: { card: Card }) {
   const m = card.data;
+  const acct = card.account || m.account || "personal";
+  const [compose, setCompose] = useState<ComposeInit | null>(null);
+  const [opening, setOpening] = useState("");
+  const boxRef = useRef<HTMLDivElement>(null);
+  const open = async (mode: "reply" | "reply_all" | "forward", ai = false) => {
+    setOpening(mode + (ai ? "ai" : ""));
+    const r = await core.workspace("mail_context", { account: acct, message_id: m.id, mode });
+    setOpening("");
+    if (!r.ok) { useStore.getState().toast({ text: r.error || "Couldn't open the composer.", error: true }); return; }
+    setCompose({ ...r.result, account: acct, mode, ai });
+    setTimeout(() => boxRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+  };
+  const spin = (k: string) => opening === k ? <span className="cx-spin" /> : null;
   return (
     <div className="email-view">
       <div className="email-head">
         <div className="avatar lg">{initials(m.from_name || m.from_email || "?")}</div>
         <div>
+          <div className="subject-lg">{m.subject}</div>
           <div className="from">{m.from_name} <span className="muted">&lt;{m.from_email}&gt;</span></div>
           <div className="muted small">to {m.to}{m.cc ? `, cc ${m.cc}` : ""} · {fmtDate(m.internalDate || m.date)}</div>
         </div>
       </div>
-      <div className="email-body">{m.body || m.snippet}</div>
-      {m.body_truncated && <div className="muted small">… truncated</div>}
+      <MailBody account={acct} id={m.id} text={m.body || m.snippet} />
       {m.attachments?.length > 0 && (
         <div className="chips">{m.attachments.map((a: any) => <span key={a.attachmentId} className="chip">📎 {a.filename} <span className="muted">{bytes(a.size)}</span></span>)}</div>
       )}
-      <div className="card-actions">
-        <Btn onClick={() => core.sendText(`Draft a reply to the email from ${m.from_name || m.from_email} about "${m.subject}" (message id ${m.id}, ${card.account} account).`)}>Draft reply</Btn>
-        <Btn tone="ghost" onClick={() => core.direct("gmail_read_thread", { account: card.account, thread_id: m.threadId })}>Full thread</Btn>
-        <Btn tone="ghost" onClick={() => core.direct("gmail_modify", { account: card.account, message_ids: [m.id], archive: true })}>Archive</Btn>
-        <TrashBtn account={card.account} id={m.id} />
-      </div>
+      {!compose && (
+        <div className="card-actions mail-actions" onClick={(e) => e.stopPropagation()}>
+          <Btn onClick={() => open("reply")}>{spin("reply")}↩ Reply</Btn>
+          <Btn onClick={() => open("reply", true)}>{spin("replyai")}✨ AI Reply</Btn>
+          <Btn tone="ghost" onClick={() => open("reply_all")}>{spin("reply_all")}↩↩ Reply all</Btn>
+          <Btn tone="ghost" onClick={() => open("forward")}>{spin("forward")}↪ Forward</Btn>
+          <Btn tone="ghost" onClick={() => core.direct("gmail_read_thread", { account: acct, thread_id: m.threadId })}>Full thread</Btn>
+          <Btn tone="ghost" onClick={() => core.direct("gmail_modify", { account: acct, message_ids: [m.id], archive: true })}>Archive</Btn>
+          <TrashBtn account={acct} id={m.id} />
+        </div>
+      )}
+      <div ref={boxRef}>{compose && <MailComposer init={compose} onClose={() => setCompose(null)} />}</div>
     </div>
   );
 }

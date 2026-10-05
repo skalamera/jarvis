@@ -159,13 +159,13 @@ function ArtistLinks({ t, onOpen, className }: { t: { artist: string; artists?: 
   );
 }
 
-function usePlayer(card: Card, kind: "music" | "video", firstId: string, handlers: { next?: () => void; previous?: () => void; onEnded?: () => void; onError?: (code: number) => void }) {
+export function usePlayer(card: Card, kind: "music" | "video", firstId: string, handlers: { next?: () => void; previous?: () => void; onEnded?: () => void; onError?: (code: number) => void }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const api = useRef<ReturnType<typeof attachYT> | null>(null);
   const [info, setInfo] = useState<YTInfo>({ state: -1, time: 0, duration: 0, volume: media.volume, muted: false, title: "" });
   const h = useRef(handlers);
   h.current = handlers;
-  const [src] = useState(() => embedUrl(firstId, { controls: kind === "video", paused: !!card.data?.paused }));
+  const [src] = useState(() => embedUrl(firstId, { controls: kind === "video", paused: !!card.data?.paused, start: card.data?.start }));
 
   useEffect(() => {
     const f = frame.current;
@@ -188,6 +188,7 @@ function usePlayer(card: Card, kind: "music" | "video", firstId: string, handler
       previous: () => h.current.previous?.(),
       stop: () => { a.command("stopVideo"); useStore.getState().removeCard(card.id); },
       playing: () => infoRef.current.state === PLAYING || infoRef.current.state === BUFFERING,
+      info: () => infoRef.current,
     });
     return () => { a.detach(); media.unregister(card.id); };
   }, [card.id]);
@@ -589,7 +590,106 @@ function views(n: number | null) {
   return `${n} views`;
 }
 
+/** Video display. stage "center": the video plays in HoloTube over the orb and this card is the browse panel
+    (similar videos + his YouTube). Otherwise it is the player itself. */
 export function VideoCard({ card }: { card: Card }) {
+  return card.data?.stage === "center" ? <VideoBrowse card={card} /> : <VideoPlayer key={`${card.data?.results?.[0]?.video_id}:${card.data?.start ?? 0}`} card={card} />;
+}
+
+export function playInCenter(cardId: string, results: Vid[], idx: number) {
+  window.dispatchEvent(new CustomEvent("jarvis:tube", { detail: { cardId, results, idx } }));
+}
+
+function VThumbs({ list, onPick, label }: { list: Vid[]; onPick: (i: number) => void; label: string }) {
+  if (!list?.length) return null;
+  return (
+    <div className="md-vlist">
+      <div className="fx-sec">{label}</div>
+      <div className="md-vgrid">
+        {list.map((x, j) => (
+          <button key={x.video_id + j} className="md-vrow" onClick={(e) => { stop(e); onPick(j); }}>
+            <span className="md-vth">
+              <img src={x.thumb} alt="" referrerPolicy="no-referrer" onError={(e) => (e.currentTarget.style.visibility = "hidden")} />
+              {x.live ? <em className="live">LIVE</em> : x.duration ? <em>{fmtTime(x.duration)}</em> : null}
+            </span>
+            <span className="md-vt">{x.title}</span>
+            <span className="md-vc">{[x.channel, views(x.views)].filter(Boolean).join(" · ")}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function VideoBrowse({ card }: { card: Card }) {
+  const d = card.data || {};
+  const results: Vid[] = d.results || [];
+  const cur: Vid | undefined = results[d.current || 0];
+  const [prof, setProf] = useState<any>(null);
+  const [tab, setTab] = useState<"similar" | "history" | "subs" | "liked" | "later" | "mine">("similar");
+  const [chan, setChan] = useState<{ name: string; vids: Vid[] } | null>(null);
+  const [onStage, setOnStage] = useState(true);
+  useEffect(() => { core.rpc("youtube_profile", {}).then((r) => r.ok && setProf(r.result)); }, []);
+  useEffect(() => {
+    const on = (e: Event) => setOnStage(!!(e as CustomEvent).detail?.open);
+    window.addEventListener("jarvis:tube-state", on);
+    return () => window.removeEventListener("jarvis:tube-state", on);
+  }, []);
+  const play = (list: Vid[], i: number) => {
+    core.patchCard(card.id, { ...d, results: list, current: i });
+    playInCenter(card.id, list, i);
+  };
+  const playHere = () => core.patchCard(card.id, { ...d, stage: "card", results: [cur, ...results.filter((_, j) => j !== (d.current || 0))], start: 0, paused: false });
+  const tabs: [typeof tab, string, number][] = [
+    ["similar", "Similar", results.length], ["history", "Recently watched", prof?.history?.length || 0], ["subs", "Subscriptions", prof?.subscriptions?.length || 0],
+    ["liked", "Liked", prof?.liked?.length || 0], ["later", "Watch later", prof?.watch_later?.length || 0], ["mine", "My videos", prof?.mine?.length || 0],
+  ];
+  const lists: Record<string, Vid[]> = { similar: results, history: prof?.history, liked: prof?.liked, later: prof?.watch_later, mine: prof?.mine };
+  return (
+    <div className="md md-video yb">
+      {cur && (
+        <div className="yb-now">
+          <img src={cur.thumb} alt="" referrerPolicy="no-referrer" />
+          <div className="yb-now-t">
+            <div className="fx-sec">{onStage ? "PLAYING ABOVE THE ORB" : "LAST PLAYED"}</div>
+            <div className="md-vtitle">{cur.title}</div>
+            <div className="md-vsub">{[cur.channel, views(cur.views)].filter(Boolean).join(" · ")}</div>
+          </div>
+          <div className="yb-now-b" onClick={stop}>
+            {!onStage && <button className="hbtn sm hbtn-cyan" onClick={() => playInCenter(card.id, results, d.current || 0)}>▶ Orb</button>}
+            <button className="hbtn sm hbtn-cyan" onClick={() => { window.dispatchEvent(new CustomEvent("jarvis:tube-close")); setTimeout(playHere, 120); }}>▶ Here</button>
+          </div>
+        </div>
+      )}
+      {prof?.signed_in && (
+        <a className="yb-me" href={prof.channel_url} target="_blank" rel="noreferrer" onClick={stop}>
+          {prof.photo && <img src={prof.photo} alt="" referrerPolicy="no-referrer" />}<span><b>{prof.name}</b> {prof.handle}</span><em>My channel ↗</em>
+        </a>
+      )}
+      <div className="yb-tabs" onClick={stop}>
+        {tabs.filter(([k, , n]) => k === "similar" || n).map(([k, label]) => (
+          <button key={k} className={`tog ${tab === k ? "on" : ""}`} onClick={() => { setTab(k); setChan(null); }}>{label}</button>
+        ))}
+        {!prof && <span className="cx-spin" />}
+      </div>
+      {tab === "subs" && !chan && (
+        <div className="yb-subs">
+          {(prof?.subscriptions || []).map((s: any) => (
+            <button key={s.url} className="yb-sub" onClick={async (e) => { stop(e); setChan({ name: s.name, vids: [] }); const r = await core.rpc("youtube_channel", { url: s.url }); setChan({ name: s.name, vids: r.ok ? r.result.results : [] }); }}>
+              {s.thumb ? <img src={s.thumb} alt="" referrerPolicy="no-referrer" /> : <span className="md-q-ph">▶</span>}
+              <span>{s.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {chan && (chan.vids.length ? <VThumbs list={chan.vids} label={chan.name.toUpperCase()} onPick={(i) => play(chan.vids, i)} /> : <div className="muted"><span className="cx-spin" /> {chan.name}…</div>)}
+      {tab !== "subs" && <VThumbs list={(lists[tab] || []).filter((x, j) => !(tab === "similar" && j === (d.current || 0)))} label={tabs.find((t) => t[0] === tab)![1].toUpperCase()}
+        onPick={(i) => { const l = lists[tab]; const real = tab === "similar" && i >= (d.current || 0) ? i + 1 : i; play(l, real); }} />}
+    </div>
+  );
+}
+
+function VideoPlayer({ card }: { card: Card }) {
   const d = card.data || {};
   const results: Vid[] = d.results || [];
   const [q, setQ] = useState(d.query || "");

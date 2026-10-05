@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
-from jarvis_google import artifacts, calendar_ops, code, markets, media, places, pylon, routes, sports, store
+from jarvis_google import artifacts, calendar_ops, code, mail_compose, markets, media, places, pylon, routes, sports, store
 from jarvis_google import tools as gtools
 from jarvis_google.accounts import linked_accounts
 
@@ -486,7 +486,7 @@ async def ws_endpoint(ws: WebSocket):
                 # click-only ops on file / code cards (allow-listed); writes are versioned + audit-logged
                 async def run_ws(d=data):
                     op, args, req = str(d.get("op", "")), dict(d.get("args") or {}), d.get("req")
-                    fn = artifacts.CLICK_OPS.get(op) or code.CLICK_OPS.get(op) or calendar_ops.CLICK_OPS.get(op)
+                    fn = artifacts.CLICK_OPS.get(op) or code.CLICK_OPS.get(op) or calendar_ops.CLICK_OPS.get(op) or mail_compose.CLICK_OPS.get(op)
                     try:
                         r = {"ok": True, "result": await asyncio.to_thread(fn, **args)} if fn else {"ok": False, "error": "operation not allowed"}
                     except Exception as e:
