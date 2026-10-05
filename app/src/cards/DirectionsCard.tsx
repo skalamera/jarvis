@@ -41,6 +41,37 @@ export function DirectionsCard({ card }: { card: Card }) {
     if (r.ok) { setD(r.result); setSel(0); } else setErr(r.error || "No route.");
   };
 
+  const [from, setFrom] = useState(d.origin_is_here ? "" : d.origin || "");
+  const [to, setTo] = useState(d.destination || "");
+  useEffect(() => { setFrom(d.origin_is_here ? "" : d.origin || ""); setTo(d.destination || ""); }, [d.origin, d.destination]);
+  const route = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!to.trim()) { setErr("Where to?"); return; }
+    setBusy("go"); setErr("");
+    const r = await core.rpc("directions_mode", { destination: to.trim(), origin: from.trim(), mode: d.mode || "driving",
+      avoid_tolls: !!d.avoid_tolls, avoid_highways: !!d.avoid_highways });
+    setBusy("");
+    if (r.ok) { setD(r.result); setSel(0); core.patchCard(card.id, r.result, `To ${r.result.destination}`); } else setErr(r.error || "No route.");
+  };
+  const ends = (
+    <form className="dir-form" onClick={(e) => e.stopPropagation()} onSubmit={route}>
+      <div className="map-stop"><span className="map-pin a">A</span><input className="cs-in grow" value={from} onChange={(e) => setFrom(e.target.value)} placeholder="Starting point (blank = current location)" /></div>
+      <div className="map-stop"><span className="map-pin b">B</span><input className="cs-in grow" value={to} onChange={(e) => setTo(e.target.value)} placeholder="Destination" /></div>
+      <button type="submit" className="cs-go" disabled={!!busy}>{busy === "go" ? <span className="cx-spin" /> : "Route"}</button>
+    </form>
+  );
+  if (d.blank) {
+    const home = d.home || "New Rochelle, NY";
+    return (
+      <div className="dir-card">
+        {ends}
+        {err && <div className="py-warn">{err}</div>}
+        <div className="map-frame dir-map">
+          <iframe src={`https://maps.google.com/maps?q=${encodeURIComponent(home)}&z=13&output=embed`} title="map" loading="lazy" referrerPolicy="no-referrer-when-downgrade" allowFullScreen />
+        </div>
+      </div>
+    );
+  }
   const routes: any[] = d.routes || [];
   const rt = routes[sel] || routes[0];
   const origin = d.origin_is_here ? d.origin_latlng : d.origin;
@@ -53,10 +84,7 @@ export function DirectionsCard({ card }: { card: Card }) {
 
   return (
     <div className="dir-card">
-      <div className="dir-ends">
-        <div className="map-stop"><span className="map-pin a">A</span>{d.origin_is_here ? `Current location (${d.origin})` : d.origin}</div>
-        <div className="map-stop"><span className="map-pin b">B</span>{d.destination}</div>
-      </div>
+      {ends}
 
       <div className="dir-modes">
         {MODES.map(([k, label, ico]) => (

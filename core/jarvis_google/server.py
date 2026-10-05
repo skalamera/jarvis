@@ -174,6 +174,17 @@ def calendar_create(account: str, summary: str, start: str, end: str, attendees:
 
 
 @mcp.tool()
+def calendar_update(account: str, event_id: str, summary: str = "", start: str = "", end: str = "",
+                    location: str | None = None, description: str | None = None, move_to: str = "") -> str:
+    """Edit an existing event (find its id with calendar_list first). Pass ONLY what changes: summary (rename),
+    start/end (RFC3339 with offset, or YYYY-MM-DD for all-day; start alone keeps the duration), location,
+    description, move_to ("personal"/"work") to move it to the other calendar. No guests -> applied immediately.
+    Guests -> requires confirmation (Google notifies them)."""
+    return _safe(T.calendar_update, account=account, event_id=event_id, summary=summary, start=start, end=end,
+                 location=location, description=description, move_to=move_to)
+
+
+@mcp.tool()
 def calendar_delete(account: str, event_id: str) -> str:
     """Propose deleting a calendar event. Requires confirmation."""
     return _safe(T.calendar_delete, account=account, event_id=event_id)

@@ -67,6 +67,9 @@ with exactly these names and args (no tool_search / tool_describe needed; all ta
   mcp__jarvis_google__gmail_trash / gmail_delete_permanently {{account, message_ids[]}}
   mcp__jarvis_google__calendar_list {{account, time_min, time_max, query?}}  (RFC3339 with offset)
   mcp__jarvis_google__calendar_create {{account, summary, start, end, attendees?, location?, description?, add_meet?}}
+  mcp__jarvis_google__calendar_update {{account, event_id, summary?, start?, end?, location?, description?, move_to?}}
+    (edit / reschedule / rename / move an event between personal and work; calendar_list first to get the id;
+    pass only what changes. Never delete-and-recreate to edit.)
   mcp__jarvis_google__calendar_delete {{account, event_id}}
   mcp__jarvis_google__drive_search {{account, query}}   drive_read_text {{account, file_id}}
   mcp__jarvis_google__drive_share {{account, file_id, email, role}}   drive_trash {{account, file_id}}

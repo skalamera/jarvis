@@ -131,9 +131,9 @@ class MediaBus {
 export const media = new MediaBus();
 
 /** Build the embed URL. Music hides YouTube's own controls (the card has them); videos keep them. */
-export function embedUrl(videoId: string, opts: { controls?: boolean; start?: number } = {}): string {
+export function embedUrl(videoId: string, opts: { controls?: boolean; start?: number; paused?: boolean } = {}): string {
   const q = new URLSearchParams({
-    enablejsapi: "1", autoplay: "1", playsinline: "1", rel: "0", modestbranding: "1", iv_load_policy: "3",
+    enablejsapi: "1", autoplay: opts.paused ? "0" : "1", playsinline: "1", rel: "0", modestbranding: "1", iv_load_policy: "3",
     controls: opts.controls ? "1" : "0", fs: opts.controls ? "1" : "0",
   });
   if (opts.start) q.set("start", String(Math.floor(opts.start)));

@@ -28,13 +28,22 @@ export function mapUrls(d: any, mode: string) {
 }
 
 export function MapCard({ card }: { card: Card }) {
-  const d = card.data ?? {};
+  const d0 = card.data ?? {};
+  const [q, setQ] = useState(d0.query || "");
+  const [shown, setShown] = useState<string | null>(null);
+  const d = shown != null ? { ...d0, query: shown, address: undefined, lat: undefined, lng: undefined } : d0;
   const directions = !!d.destination;
   const [mode, setMode] = useState<string>(MODE[d.travel_mode] ? d.travel_mode : "driving");
   const [loaded, setLoaded] = useState(false);
   const { embed, open } = mapUrls(d, mode);
   return (
     <div className="map-card">
+      {!d0.destination && (
+        <form className="cs-bar" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); if (q.trim()) setShown(q.trim()); }}>
+          <div className="cs-q"><span>⌕</span><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search the map" /></div>
+          <button type="submit" className="cs-go">Go</button>
+        </form>
+      )}
       {directions && (
         <div className="map-route">
           <div className="map-stop"><span className="map-pin a">A</span>{d.origin || "Current location"}</div>

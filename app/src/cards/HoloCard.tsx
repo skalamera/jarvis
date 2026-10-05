@@ -6,7 +6,8 @@ export const MaxCtx = createContext<{ max: boolean; setMax: (b: boolean) => void
 import { motion } from "framer-motion";
 import { useStore } from "../state/store";
 import type { Card } from "../types";
-import { CalendarCard, ConfirmCard, DocumentCard, DraftEditor, EmailList, EmailView, FilesCard, NoticeCard, ThreadView, acctTag } from "./Cards";
+import { WebAppCard } from "./WebAppCard";
+import { CalendarCard, LaunchFilesCard, ConfirmCard, DocumentCard, DraftEditor, EmailList, EmailView, FilesCard, NoticeCard, ThreadView, acctTag } from "./Cards";
 import { ChartCard, ImageCard, LinkCard, ListCard, StatsCard, TableCard, VisualMarkdown } from "./Visuals";
 import { MapCard } from "./MapCard";
 import { WeatherCard } from "./WeatherCard";
@@ -34,6 +35,8 @@ const BODY: Record<string, (p: { card: Card }) => React.ReactElement> = {
   draft: DraftEditor,
   confirm: ConfirmCard,
   calendar: CalendarCard,
+  launch_files: LaunchFilesCard,
+  webapp: WebAppCard,
   files: FilesCard,
   document: DocumentCard,
   notice: NoticeCard,
@@ -88,7 +91,7 @@ const BODY: Record<string, (p: { card: Card }) => React.ReactElement> = {
 };
 
 const KIND_LABEL: Record<string, string> = {
-  email_list: "MAIL", email: "MESSAGE", thread: "THREAD", draft: "DRAFT", confirm: "AUTHORIZE", calendar: "CALENDAR",
+  email_list: "MAIL", email: "MESSAGE", thread: "THREAD", draft: "DRAFT", confirm: "AUTHORIZE", calendar: "CALENDAR", launch_files: "FILES", webapp: "WEB APP",
   files: "DRIVE", document: "DOCUMENT", notice: "STATUS", "visual.chart": "ANALYSIS", "visual.stats": "TELEMETRY",
   "visual.table": "DATA", "visual.list": "INDEX", "visual.image": "IMAGE", "visual.link": "LINK", "visual.markdown": "BRIEF", "visual.map": "NAVIGATION", weather: "WEATHER", pylon_list: "PYLON", pylon_ticket: "TICKET", places: "PLACES", place: "PLACE", directions: "ROUTE", stock: "MARKETS", stock_compare: "COMPARE", market: "MARKETS", crypto: "CRYPTO", slack: "SLACK", sports_game: "SPORTS", sports_scoreboard: "SCORES", music: "MUSIC", video: "VIDEO", artifact: "FILE", codebase: "CODEBASE", code_file: "SOURCE", code_changes: "CHANGES", support_blueprint: "BLUEPRINT", car_listings: "LISTINGS", garage: "GARAGE", eats_stores: "UBER EATS", trade_desk: "TRADING DESK", trade_insights: "INTELLIGENCE", trade_alert: "MARKET ALERT", trade_order: "ORDER", trade_orders: "ORDERS", eats_menu: "MENU", eats_cart: "CART", garage_search: "RECORDS", garage_diagnosis: "DIAGNOSTICS", video_analysis: "VIDEO ANALYSIS", garage_plan: "BUILD PLAN", generating: "STUDIO", travel_flights: "FLIGHTS", travel_hotels: "HOTELS", travel_car_rentals: "RENTALS", travel_restaurants: "RESERVATIONS", booking_confirmed: "BOOKED", travel_reservations: "ITINERARY",
 };
@@ -100,7 +103,7 @@ export function HoloCard({ card, index }: { card: Card; index: number }) {
   const Body = BODY[card.kind];
   // Maximize grows THIS card in place (a fixed overlay via .holo-xl) rather than re-rendering it elsewhere,
   // so live content (players, maps, forms being typed into) keeps its state. Esc or a click outside restores.
-  const [max, setMax] = useState(false);
+  const [max, setMax] = useState(!!card.openMax);
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!max) return;
@@ -137,6 +140,10 @@ export function HoloCard({ card, index }: { card: Card; index: number }) {
     >
       <span className="corner tl" /><span className="corner tr" /><span className="corner bl" /><span className="corner br" />
       <header className="holo-head">
+        {card.parent && (
+          <button className="holo-back" onClick={(e) => { e.stopPropagation(); core.back(card.id, max); }}
+            title={`Back to ${card.parent.title}`}>‹ BACK</button>
+        )}
         <span className="holo-kind">{KIND_LABEL[card.kind] ?? card.kind.toUpperCase()}</span>
         {tag && <span className={`acct acct-${card.account}`}>{tag}</span>}
         <span className="holo-title" title={card.title}>{card.title}</span>

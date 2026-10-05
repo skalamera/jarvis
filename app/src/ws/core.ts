@@ -243,11 +243,27 @@ class CoreLink {
           s.set({ forge: { ...fg, result: c } });
           break;
         }
+        if (this.launchAt && Date.now() - this.launchAt < 40_000 && c.kind !== "confirm") {
+          this.launchAt = 0;
+          c.openMax = true;
+          for (const x of useStore.getState().cards.filter((x) => x.kind === c.kind)) s.removeCard(x.id);
+        }
         const same = key ? useStore.getState().cards.find((x) => x.data?.key === key) : undefined;
         if (same) {
           // The same file / project re-rendered after an edit: refresh that display in place, don't stack copies.
           s.set({ cards: useStore.getState().cards.map((x) => (x.id === same.id ? { ...c, id: same.id } : x)),
             focusCardId: same.id, rightTab: "displays" });
+          break;
+        }
+        const dr = this.drill;
+        const parent = dr && Date.now() - dr.at < 25_000 && c.kind !== "confirm" && c.kind !== "music" && c.kind !== "video"
+          ? useStore.getState().cards.find((x) => x.id === dr.id) : undefined;
+        if (parent) {
+          // He clicked into something on a card: open it IN PLACE (keeping maximized if it was), with Back.
+          this.drill = null;
+          const child = { ...c, parent: { ...parent, openMax: false }, openMax: dr!.max };
+          s.set({ cards: useStore.getState().cards.map((x) => (x.id === parent.id ? child : x)), focusCardId: child.id,
+            rightTab: "displays" });
           break;
         }
         s.addCard(c);
@@ -356,6 +372,7 @@ class CoreLink {
 
   // ------------------------------------------------------------ actions from UI
   async sendText(text: string): Promise<void> {
+    this.drill = null;
     await this.speaker?.unlock();
     this.speaker?.stop();
     this.send({ type: "user_text", text, source: "text" });
@@ -461,7 +478,49 @@ class CoreLink {
     this.speaker?.stop();
     this.send({ type: "reset" });
   }
+  /** The card he just clicked inside (set by a capture listener) -> the next card Core pushes opens IN PLACE of it. */
+  private lastClick: { id: string; max: boolean; at: number } | null = null;
+  private drill: { id: string; max: boolean; at: number } | null = null;
+  trackClicks(): void {
+    window.addEventListener("pointerdown", (e) => {
+      const el = (e.target as Element)?.closest?.("[data-card-id]") as HTMLElement | null;
+      this.lastClick = el ? { id: el.dataset.cardId!, max: el.classList.contains("holo-xl"), at: Date.now() } : null;
+    }, true);
+  }
+  private markDrill(): void {
+    const l = this.lastClick;
+    this.drill = l && Date.now() - l.at < 3000 ? { ...l, at: Date.now() } : null;
+  }
+  /** Launcher: the next card Core pushes opens maximized. */
+  private launchAt = 0;
+  launchTool(tool: string, args: Record<string, unknown> = {}): void {
+    this.markDrill();  // clicked inside a card (e.g. a file in the Files list) -> opens in place with Back
+    this.launchAt = this.drill ? 0 : Date.now();
+    this.send({ type: "launch_tool", tool, args });
+  }
+  /** Launcher: show a card the HUD built itself, maximized. */
+  launchCard(c: Omit<Card, "id" | "createdAt"> & { id?: string }): void {
+    const s = useStore.getState();
+    const id = c.id || `launch-${c.kind}-${Date.now().toString(36)}`;
+    const old = s.cards.filter((x) => x.kind === c.kind && x.id.startsWith("launch-"));
+    s.set({ cards: s.cards.filter((x) => !old.includes(x)) });
+    s.addCard({ ...c, id, createdAt: Date.now(), openMax: true } as Card);
+  }
+  /** Replace a card's data in place (search bars / filters on a display). */
+  patchCard(id: string, data: any, title?: string): void {
+    const s = useStore.getState();
+    s.set({ cards: s.cards.map((x) => (x.id === id ? { ...x, data, ...(title ? { title } : {}) } : x)) });
+  }
+  /** Back from a drilled-into card: put the parent back where the child is. */
+  back(id: string, max: boolean): void {
+    const s = useStore.getState();
+    const c = s.cards.find((x) => x.id === id);
+    if (!c?.parent) return;
+    const parent = { ...c.parent, openMax: max };
+    s.set({ cards: s.cards.map((x) => (x.id === id ? parent : x)), focusCardId: parent.id });
+  }
   direct(op: string, args: Record<string, unknown>): void {
+    this.markDrill();
     this.send({ type: "direct", op, args });
   }
   briefingRefresh(): void {
@@ -489,21 +548,25 @@ class CoreLink {
 
   /** Click on a place row: Core fetches the full Google card and pushes it through the feed. */
   openPlace(placeId: string): void {
+    this.markDrill();
     this.send({ type: "place_open", place_id: placeId });
   }
 
   /** Click on a game in a scoreboard card: Core builds the full game card and pushes it. */
   openGame(league: string, eventId: string): void {
+    this.markDrill();
     this.send({ type: "game_open", league, event_id: eventId });
   }
 
   /** Click on a ticker anywhere in a market card: Core builds the full stock / crypto card and pushes it. */
   /** Route to a place inside the HUD: Core computes it and pushes a directions card. */
   openDirections(destination: string): void {
+    this.markDrill();
     this.send({ type: "directions_open", destination });
   }
 
   openMarket(symbol: string, kind: "stock" | "crypto" = "stock"): void {
+    this.markDrill();
     this.send({ type: "market_open", symbol, kind });
   }
 
@@ -536,3 +599,4 @@ class CoreLink {
 }
 
 export const core = new CoreLink();
+core.trackClicks();

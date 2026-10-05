@@ -50,7 +50,7 @@ function Hero({ p, heroId }: { p: any; heroId?: string }) {
   const spent = p.totals?.documented_spend;
   return (
     <div className="gr-hero">
-      <div className="gr-photo">{heroId ? <img src={fileUrl(heroId)} alt="" /> : <span>🚘</span>}<i />{heroId === "hero" && <em>RENDER</em>}</div>
+      <div className="gr-photo">{heroId ? <img src={fileUrl(heroId)} alt="" /> : <span>🚘</span>}<i /></div>
       <div className="gr-id">
         <div className="gr-badge">{v.chassis || "C215"} · {v.engine?.split(",")[0] || "M275 V12 Biturbo"}</div>
         <div className="gr-name">{v.year || 2003} Mercedes-Benz {v.model || "CL600"}</div>

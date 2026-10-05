@@ -552,7 +552,7 @@ def _slots_near(slots: list[dict], want: str) -> list[dict]:
 
 
 def restaurants_search(query: str = "", near: str = "", date: str = "", time: str = "19:00", party_size: int = 2,
-                       max_results: int = 8) -> dict:
+                       max_results: int = 8, time_from: str = "", time_to: str = "") -> dict:
     """Resy tables near home (or `near`) for a date/party, with the open times closest to `time`."""
     w = _where(near)
     day = _date(date)
@@ -567,6 +567,11 @@ def restaurants_search(query: str = "", near: str = "", date: str = "", time: st
     rows = []
     for h in (r.json().get("search") or {}).get("hits") or []:
         slots = _slots_near((h.get("availability") or {}).get("slots") or [], time)
+        if time_from or time_to:  # a time window (the card's range picker): every open time inside it, in order
+            lo, hi = (time_from or "00:00")[:5], (time_to or "23:59")[:5]
+            slots = sorted((s for s in slots if lo <= s["time"] <= hi), key=lambda s: s["time"])
+            for s in slots:
+                s["off"] = 0
         if not slots:
             continue
         g = h.get("_geoloc") or {}
@@ -577,14 +582,15 @@ def restaurants_search(query: str = "", near: str = "", date: str = "", time: st
                      "reviews": (h.get("rating") or {}).get("count"), "photo": (h.get("images") or [None])[0],
                      "url": f"https://resy.com/cities/{(h.get('location') or {}).get('url_slug', '')}/venues/{h.get('url_slug', '')}",
                      "distance_km": _km(w, {"latitude": g.get("lat"), "longitude": g.get("lng")}),
-                     "slots": slots[:8], "best_off": slots[0]["off"]})
+                     "slots": slots[:16 if (time_from or time_to) else 8], "best_off": slots[0]["off"]})
     if query:  # a named place: keep Resy's relevance order
         pass
     else:
         rows.sort(key=lambda x: (x["best_off"] > 60, -(x["rating"] or 0)))
     top = rows[:max(1, min(int(max_results or 8), 12))]
     out = {"kind": "restaurants", "key": f"travel:resy:{query}-{w['name']}-{day}-{party}", "near": w["name"],
-           "date": day, "time": time, "party_size": party, "query": query, "restaurants": top}
+           "date": day, "time": time, "party_size": party, "query": query, "restaurants": top,
+           "time_from": time_from, "time_to": time_to}
     store.record_result("restaurants_search", None, {"query": query, "date": day}, out)
     return {"near": w["name"], "date": day, "party_size": party,
             "options": [{"venue_id": x["venue_id"], "name": x["name"], "cuisine": x["cuisine"], "rating": x["rating"],

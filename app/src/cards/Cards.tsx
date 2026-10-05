@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { core } from "../ws/core";
@@ -6,6 +6,8 @@ import type { Card } from "../types";
 import { acctTag, bytes, dayLabel, fmtDate, fmtEventTime, initials, mimeLabel } from "./format";
 import { BookingPreview } from "./TravelCards";
 import { TradeOrderPreview } from "./TradeCards";
+import { MaxCtx } from "./HoloCard";
+import { CalendarXL } from "./CalendarXL";
 
 const Btn = ({ children, onClick, tone = "cyan", disabled }: { children: React.ReactNode; onClick?: () => void; tone?: "cyan" | "amber" | "red" | "ghost"; disabled?: boolean }) => (
   <button className={`hbtn hbtn-${tone}`} onClick={onClick} disabled={disabled}>{children}</button>
@@ -214,6 +216,7 @@ export function ConfirmCard({ card }: { card: Card }) {
           {p.location && <div><b>Where</b> {p.location}</div>}
         </div>
       )}
+      {p.type === "calendar_update" && <div className="preview-mail"><div><b>{p.summary}</b>{p.old_summary && p.old_summary !== p.summary && <span className="muted"> (was {p.old_summary})</span>}</div><div>{p.old_start !== p.start && <><span className="muted" style={{ textDecoration: "line-through" }}>{fmtDate(p.old_start)}</span> → </>}{fmtDate(p.start)}</div>{p.attendees?.length > 0 && <div className="muted">{p.attendees.length} guest(s) will be notified.</div>}</div>}
       {p.type === "calendar_delete" && <div className="preview-mail"><div><b>{p.summary}</b> · {fmtDate(p.start)}</div>{p.attendees?.length > 0 && <div className="muted">Attendees will be notified.</div>}</div>}
       {p.type === "drive_share" && <div className="preview-mail"><div><b>{p.name}</b></div><div>→ {p.email} ({p.role})</div></div>}
       {p.type === "drive_trash" && <div className="preview-mail"><div><b>{p.name}</b></div></div>}
@@ -237,6 +240,8 @@ export function ConfirmCard({ card }: { card: Card }) {
 
 // ------------------------------------------------------------------------ calendar
 export function CalendarCard({ card }: { card: Card }) {
+  const mx = useContext(MaxCtx);
+  if (mx?.max) return <CalendarXL defaultAccount={card.account ?? undefined} />;
   const events: any[] = card.data?.events ?? [];
   if (!events.length) return <div className="muted">Nothing scheduled.</div>;
   const groups: Record<string, any[]> = {};
@@ -265,6 +270,36 @@ export function CalendarCard({ card }: { card: Card }) {
           })}
         </div>
       ))}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------------ workspace files (launcher)
+export function LaunchFilesCard({ card }: { card: Card }) {
+  const files: any[] = card.data?.files ?? [];
+  const [q, setQ] = useState("");
+  const [kind, setKind] = useState("all");
+  const kinds = ["all", ...Array.from(new Set(files.map((f) => f.kind)))];
+  const rows = files.filter((f) => (kind === "all" || f.kind === kind) && f.filename.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <div className="lf">
+      <form className="cs-bar" onClick={(e) => e.stopPropagation()} onSubmit={(e) => e.preventDefault()}>
+        <div className="cs-q"><span>⌕</span><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter files" /></div>
+        <select className="cs-in" value={kind} onChange={(e) => setKind(e.target.value)}>{kinds.map((k) => <option key={k} value={k}>{k}</option>)}</select>
+      </form>
+      {!rows.length && <div className="muted">No files.</div>}
+      <div className="list">
+        {rows.map((f) => (
+          <button key={f.id} className="row file-row lf-row" onClick={(e) => { e.stopPropagation(); core.launchTool("file_open", { artifact_id: f.id }); }}>
+            <div className="file-type">{String(f.kind).toUpperCase().slice(0, 5)}</div>
+            <div className="row-main">
+              <div className="subject">{f.filename}</div>
+              <div className="muted small">{bytes(f.size)} · v{f.version} · {fmtDate(new Date(f.updated_at * 1000).toISOString())}</div>
+            </div>
+            <span className="pl-row-go">›</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

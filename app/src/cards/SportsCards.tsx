@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useStore } from "../state/store";
 import { core } from "../ws/core";
 import type { Card } from "../types";
 
@@ -55,6 +56,19 @@ function StatusPill({ s }: { s: Status }) {
 /* ------------------------------------------------------------------ GAME */
 export function GameCard({ card }: { card: Card }) {
   const d = card.data || {};
+  // Live games refresh themselves (score, clock, win probability) every 20 s; pregame every 5 min.
+  const state = d.status?.state;
+  useEffect(() => {
+    if (!d.event_id || state === "post") return;
+    let gone = false;
+    const t = window.setInterval(async () => {
+      const r = await core.rpc("game_refresh", { league: d.league, event_id: d.event_id });
+      if (gone || !r.ok || !r.result) return;
+      const s = useStore.getState();
+      s.set({ cards: s.cards.map((x) => (x.id === card.id ? { ...x, data: { ...x.data, ...r.result } } : x)) });
+    }, state === "in" ? 20_000 : 300_000);
+    return () => { gone = true; window.clearInterval(t); };
+  }, [d.event_id, d.league, state, card.id]);
   const teams: Team[] = d.teams || [];
   const [away, home] = [teams[0], teams[1]];
   const tabs = useMemo(() => {
@@ -87,6 +101,8 @@ export function GameCard({ card }: { card: Card }) {
         </div>
         <HeroTeam t={home} pre={pre} right />
       </div>
+
+      <WinOdds d={d} away={away} home={home} />
 
       {!pre && d.periods?.length > 0 && <Linescore d={d} away={away} home={home} />}
 
@@ -194,6 +210,29 @@ function Summary({ d, away, home, goHighlights }: { d: any; away: Team; home: Te
           </div>
         </button>
       )}
+    </div>
+  );
+}
+
+/** Headline win chance: ESPN's pregame projection before kickoff, the live model during the game. */
+function WinOdds({ d, away, home }: { d: any; away: Team; home: Team }) {
+  const live: number[] = d.win_prob || [];
+  const state = d.status?.state;
+  if (state === "post") return null;
+  const h = state === "in" && live.length ? live[live.length - 1] : d.pregame_prob;
+  if (h == null) return null;
+  const pre = d.pregame_prob;
+  const delta = state === "in" && pre != null ? Math.round((h - pre) * 100) : 0;
+  const hp = Math.round(h * 100), ap = 100 - hp;
+  return (
+    <div className="sp-odds">
+      <div className="sp-odds-h">
+        <span className={ap > hp ? "fav" : ""}>{away.abbr} {ap}%</span>
+        <label>{state === "in" ? <><i className="sp-live-dot" />LIVE WIN PROBABILITY</> : "PREGAME WIN PROBABILITY"}
+          {delta !== 0 && <em> · {home.abbr} {delta > 0 ? "+" : ""}{delta} since kickoff</em>}</label>
+        <span className={hp > ap ? "fav" : ""}>{hp}% {home.abbr}</span>
+      </div>
+      <div className="sp-odds-bar"><b style={{ width: `${ap}%` }} /><s style={{ width: `${hp}%` }} /></div>
     </div>
   );
 }

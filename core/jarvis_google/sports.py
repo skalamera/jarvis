@@ -393,6 +393,17 @@ def _win_prob(s: dict) -> list[float]:
     return [round(float(x), 3) for x in wp]
 
 
+def _pregame(s: dict) -> float | None:
+    """ESPN's pregame projection (home win chance 0-1), normalized so home + away = 1."""
+    p = s.get("predictor") or {}
+    try:
+        h = float((p.get("homeTeam") or {}).get("gameProjection"))
+        a = float((p.get("awayTeam") or {}).get("gameProjection"))
+        return round(h / (h + a), 3) if h + a > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
 def game_summary(league: str, event_id: str) -> dict:
     path, label = LEAGUES[league]
     s = _get(f"{path}/summary", ttl=30, event=event_id)
@@ -428,6 +439,7 @@ def game_summary(league: str, event_id: str) -> dict:
         "players": _players(s.get("boxscore") or {}),
         "scoring": _scoring(s, abbr_by_id),
         "win_prob": _win_prob(s),
+        "pregame_prob": _pregame(s),
         "videos": _videos(s),
         "recap": recap,
         "articles": _articles(league, teams, game_day) if teams else [],

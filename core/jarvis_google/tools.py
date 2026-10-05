@@ -537,6 +537,52 @@ def _x_cal_create(account, summary, start, end, attendees=(), location="", descr
     return {"event_id": e["id"], "htmlLink": e.get("htmlLink"), "hangout": e.get("hangoutLink", "")}
 
 
+def calendar_update(account: str, event_id: str, summary: str = "", start: str = "", end: str = "",
+                    location: str | None = None, description: str | None = None, move_to: str = "") -> dict:
+    """Change an existing event; only the fields given change. Moving start without end keeps the duration.
+    No guests -> applied now. Guests (Google emails them) -> needs confirmation."""
+    from datetime import datetime
+    account = resolve_account(account)
+    e = service("calendar", account).events().get(calendarId="primary", eventId=event_id).execute()
+    s0, e0 = e.get("start", {}), e.get("end", {})
+    cur_start, cur_end = s0.get("dateTime") or s0.get("date"), e0.get("dateTime") or e0.get("date")
+    new_start, new_end = start or cur_start, end or cur_end
+    if start and not end:
+        if len(start) == 10 and len(cur_start) == 10:
+            from datetime import date
+            span = date.fromisoformat(cur_end) - date.fromisoformat(cur_start)
+            new_end = (date.fromisoformat(start) + span).isoformat()
+        elif len(start) > 10 and len(cur_start) > 10:
+            span = datetime.fromisoformat(cur_end) - datetime.fromisoformat(cur_start)
+            new_end = (datetime.fromisoformat(start) + span).isoformat()
+        else:
+            raise ValueError("switching between all-day and timed needs both start and end")
+    target = resolve_account(move_to) if move_to else account
+    params = {"event_id": event_id, "summary": summary or e.get("summary", ""), "start": new_start, "end": new_end,
+              "all_day": len(new_start) == 10,
+              "location": e.get("location", "") if location is None else location,
+              "description": e.get("description", "") if description is None else description,
+              "new_account": target if target != account else ""}
+    guests = [a.get("email") for a in e.get("attendees", []) if not a.get("self")]
+    if guests:
+        if target != account:
+            raise ValueError("events with guests can't be moved between accounts")
+        preview = {"type": "calendar_update", "summary": params["summary"], "old_summary": e.get("summary"),
+                   "old_start": cur_start, "start": new_start, "end": new_end, "location": params["location"],
+                   "attendees": guests}
+        return store.propose("calendar_update", account, params,
+                             f"Update \"{e.get('summary')}\" and notify {len(guests)} guest(s)", preview)
+    r = _x_cal_update(account, **params)
+    return _feed("calendar_update", account, {"event_id": event_id}, {"status": "updated", **r})
+
+
+@store.executor("calendar_update")
+def _x_cal_update(account, event_id, summary, start, end, all_day=False, location="", description="", new_account=""):
+    from . import calendar_ops
+    return calendar_ops.cal_update(account, event_id, summary, start, end, all_day=all_day, location=location,
+                                   description=description, new_account=new_account)
+
+
 def calendar_delete(account: str, event_id: str) -> dict:
     account = resolve_account(account)
     e = service("calendar", account).events().get(calendarId="primary", eventId=event_id).execute()

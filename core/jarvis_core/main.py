@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
-from jarvis_google import artifacts, code, markets, media, places, pylon, routes, sports, store
+from jarvis_google import artifacts, calendar_ops, code, markets, media, places, pylon, routes, sports, store
 from jarvis_google import tools as gtools
 from jarvis_google.accounts import linked_accounts
 
@@ -362,6 +362,8 @@ async def ws_endpoint(ws: WebSocket):
                     fn = {"directions_mode": routes.directions_mode, "market_chart": markets.market_chart,
                           "crypto_chart": markets.crypto_chart, "trade_chart": trading.chart,
                           "trade_preview": trading.preview, "trade_book": trading.orderbook,
+                          "game_refresh": sports.game_summary,
+                          **__import__("jarvis_google.launch", fromlist=["RPC"]).RPC,
                           "trade_history": trading.trade_history,
                           "music_artist": media.music_artist, "music_album": media.music_album,
                           "music_find": media.music_find, "music_radio": media.music_radio,
@@ -404,6 +406,27 @@ async def ws_endpoint(ws: WebSocket):
                     except Exception as e:
                         await send({"type": "toast", "text": f"Couldn't load that game: {e}"[:200], "error": True})
                 asyncio.create_task(run_game())
+            elif t == "launch_tool":
+                # Launcher icon: run one read-only display tool directly (no model turn) and push its card.
+                async def run_launch(d=data):
+                    allowed = {"car_profile", "weather", "market_overview", "trade_portfolio", "sports_game",
+                               "slack_updates", "pylon_tickets", "file_open", "gmail_search"}
+                    tool, args = str(d.get("tool", "")), dict(d.get("args") or {})
+                    try:
+                        if tool not in allowed:
+                            raise ValueError("not a launcher tool")
+                        from jarvis_google import server as gserver
+                        out = await asyncio.to_thread(getattr(gserver, tool), **args)
+                        try:
+                            err = json.loads(out).get("error") if isinstance(out, str) else None
+                        except Exception:
+                            err = None
+                        if err:
+                            raise RuntimeError(err)
+                        await session._flush_feed("direct")
+                    except Exception as e:
+                        await send({"type": "toast", "text": f"Couldn't open that: {e}"[:200], "error": True})
+                asyncio.create_task(run_launch())
             elif t == "place_open":
                 async def run_place(d=data):
                     try:
@@ -463,7 +486,7 @@ async def ws_endpoint(ws: WebSocket):
                 # click-only ops on file / code cards (allow-listed); writes are versioned + audit-logged
                 async def run_ws(d=data):
                     op, args, req = str(d.get("op", "")), dict(d.get("args") or {}), d.get("req")
-                    fn = artifacts.CLICK_OPS.get(op) or code.CLICK_OPS.get(op)
+                    fn = artifacts.CLICK_OPS.get(op) or code.CLICK_OPS.get(op) or calendar_ops.CLICK_OPS.get(op)
                     try:
                         r = {"ok": True, "result": await asyncio.to_thread(fn, **args)} if fn else {"ok": False, "error": "operation not allowed"}
                     except Exception as e:

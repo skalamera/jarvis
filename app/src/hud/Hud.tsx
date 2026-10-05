@@ -158,6 +158,73 @@ export function setLogOpen(open: boolean) {
   useStore.getState().set(open ? { logOpen: true, logUnseen: 0 } : { logOpen: false });
 }
 
+/** App launcher: every icon opens its display directly (no model turn), maximized. */
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+async function viaRpc(op: string, args: Record<string, unknown>, kind: string, title: string, label: string) {
+  const s = useStore.getState();
+  s.toast({ text: `Opening ${label}…` });
+  const r = await core.rpc(op, args);
+  if (!r.ok) { s.toast({ text: `Couldn't open ${label}: ${r.error}`, error: true }); return; }
+  core.launchCard({ kind, title, account: null, data: r.result });
+}
+const HOME = "New Rochelle, NY";
+const LAUNCH: { icon: string; label: string; run: () => void }[] = [
+  { icon: "🚘", label: "Garage", run: () => core.launchTool("car_profile", { section: "overview" }) },
+  { icon: "⛅", label: "Weather", run: () => core.launchTool("weather", {}) },
+  { icon: "▶", label: "YouTube", run: () => viaRpc("youtube_home", {}, "video", "YouTube · Home", "YouTube") },
+  { icon: "♫", label: "YT Music", run: () => viaRpc("music_home", {}, "music", "YouTube Music · Your library", "YouTube Music") },
+  { icon: "📈", label: "Markets", run: () => core.launchTool("market_overview", {}) },
+  { icon: "₿", label: "Trading", run: () => core.launchTool("trade_portfolio", {}) },
+  { icon: "🍽", label: "Resy", run: () => viaRpc("resy_find", { date: today(), party_size: 2 }, "travel_restaurants", "Resy · near you", "Resy") },
+  { icon: "🗺", label: "Maps", run: () => core.launchCard({ kind: "visual.map", title: `Map · ${HOME}`, account: null, data: { query: HOME, zoom: 13, searchable: true } }) },
+  { icon: "📍", label: "Places", run: () => viaRpc("places_find", {}, "places", "Places · near you", "Places") },
+  { icon: "🧭", label: "Directions", run: () => core.launchCard({ kind: "directions", title: "Directions", account: null, data: { blank: true, origin: "", destination: "", home: HOME, mode: "driving", routes: [] } }) },
+  { icon: "🥡", label: "Uber Eats", run: () => core.launchCard({ kind: "webapp", title: "Uber Eats", account: null, data: { url: "https://www.ubereats.com/", partition: "persist:ubereats" } }) },
+  { icon: "✈", label: "Flights", run: () => core.launchCard({ kind: "travel_flights", title: "Flights", account: null, data: { form: true, offers: [] } }) },
+  { icon: "🏟", label: "Sports", run: () => core.launchTool("sports_game", { league: "nfl" }) },
+  { icon: "📅", label: "Calendar", run: () => core.launchCard({ kind: "calendar", title: "Calendar", account: "personal", data: { events: [] } }) },
+  { icon: "✉", label: "Inbox", run: () => core.launchTool("gmail_search", { account: "personal", query: "in:inbox", max_results: 25 }) },
+  { icon: "💬", label: "Slack", run: () => core.launchTool("slack_updates", {}) },
+  { icon: "🎫", label: "Pylon", run: () => core.launchTool("pylon_tickets", {}) },
+  { icon: "🗂", label: "Files", run: () => viaRpc("file_list", {}, "launch_files", "Your files", "Files") },
+];
+
+function Launcher() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const off = (e: Event) => { const n = e.target as Node; if (!ref.current?.contains(n) && !popRef.current?.contains(n)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } };
+    window.addEventListener("pointerdown", off, true);
+    window.addEventListener("keydown", esc, true);
+    return () => { window.removeEventListener("pointerdown", off, true); window.removeEventListener("keydown", esc, true); };
+  }, [open]);
+  return (
+    <div className="launcher" ref={ref}>
+      <button className={`attach-btn launch-btn ${open ? "on" : ""}`} title="Launcher" onClick={() => setOpen(!open)}>
+        <svg viewBox="0 0 24 24" width="17" height="17"><path fill="currentColor" d="M4 4h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4zM4 10h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4zM4 16h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4z" /></svg>
+      </button>
+      {open && createPortal(
+        <div className="launch-pop" role="menu" ref={popRef}
+          style={(() => { const b = ref.current!.getBoundingClientRect(); return { left: Math.max(12, b.left - 60), bottom: window.innerHeight - b.top + 14 }; })()}>
+          <div className="launch-h">LAUNCH</div>
+          <div className="launch-grid">
+            {LAUNCH.map((a) => (
+              <button key={a.label} className="launch-app" title={`Open ${a.label}`}
+                onClick={() => { setOpen(false); a.run(); }}>
+                <span className="launch-ic img"><img src={`launcher/${encodeURIComponent(a.label)}.svg`} alt="" draggable={false} onError={(e) => { e.currentTarget.replaceWith(document.createTextNode(a.icon)); }} /></span>
+                <span className="launch-lb">{a.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>, document.body,
+      )}
+    </div>
+  );
+}
+
 /** The conversation log: hidden by default (the orb + captions are the main view), opened from the composer. */
 function Transcript() {
   const messages = useStore((s) => s.messages);
@@ -267,6 +334,7 @@ function Composer() {
     <div className="composer">
       <LogToggle />
       <AttachControls />
+      <Launcher />
       <button
         className={`mic-btn ${hud === "listening" ? "live" : ""}`}
         title="Click to talk · hold to push-to-talk"

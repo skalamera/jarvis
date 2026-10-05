@@ -102,6 +102,7 @@ function createWindow(): void {
       nodeIntegration: false,
       sandbox: true,
       backgroundThrottling: false,
+      webviewTag: true, // in-app web apps (Uber Eats) in their own persistent partition
     },
   });
   win.once("ready-to-show", () => win?.show());
@@ -254,6 +255,24 @@ app.whenReady().then(async () => {
   // Music visualizer: the HUD asks getDisplayMedia() for its OWN audio (the YouTube Music iframe lives in this
   // window). Answer with this window's frame as both sources and keep local playback audible (enableLocalEcho).
   // Tab capture of our own webContents needs no macOS screen-recording permission and never sees other apps.
+  // Web-app cards: lock guests down (no node, no preload) and present as desktop Chrome so sites don't block Electron.
+  app.on("web-contents-created", (_e, wc) => {
+    wc.on("will-attach-webview", (_ev, prefs, params) => {
+      delete (prefs as any).preload;
+      prefs.nodeIntegration = false;
+      prefs.contextIsolation = true;
+      if (!/^https:\/\//.test(params.src || "")) _ev.preventDefault();
+    });
+    if (wc.getType() === "webview") {
+      wc.setUserAgent(wc.getUserAgent().replace(/\s?Electron\/\S+/, "").replace(/\s?J\.A\.R\.V\.I\.S\/\S+/, ""));
+      wc.setWindowOpenHandler(({ url }) => {
+        // sign-in popups (Google/Apple) stay in-app; everything else opens in-place
+        if (/accounts\.google|appleid\.apple|auth\.uber|login\.uber/.test(url)) return { action: "allow" };
+        wc.loadURL(url);
+        return { action: "deny" };
+      });
+    }
+  });
   session.defaultSession.setDisplayMediaRequestHandler((request, cb) => {
     const frame = request.frame;
     const own = frame && BrowserWindow.getAllWindows().some((w) => w.webContents.mainFrame === frame);

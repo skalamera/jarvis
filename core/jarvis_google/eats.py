@@ -18,6 +18,10 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+try:
+    from curl_cffi import requests as curl_requests
+except ImportError:
+    curl_requests = None
 
 from . import store as S
 
@@ -67,19 +71,59 @@ def _location() -> dict:
     return _loc_cache
 
 
+def _cookies() -> dict[str, str]:
+    cookies: dict[str, str] = {}
+    f = S.STATE_DIR / "ubereats_cookies.json"
+    if f.exists():
+        try:
+            cookies.update(json.loads(f.read_text()))
+        except Exception:
+            pass
+    cookies["uev2.loc"] = urllib.parse.quote(json.dumps(_location()))
+    sid = _env("UBER_EATS_SID")
+    if sid:
+        cookies["sid"] = sid
+    return cookies
+
+
 def _headers() -> dict:
-    return {"User-Agent": UA, "x-csrf-token": "x", "Content-Type": "application/json", "Accept-Language": "en-US"}
+    return {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "x-csrf-token": "x",
+        "Content-Type": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "accept": "*/*",
+        "origin": "https://www.ubereats.com",
+    }
 
 
 def _post(endpoint: str, body: dict, ttl: float = 0) -> dict:
     key = endpoint + json.dumps(body, sort_keys=True)
     if ttl and key in _cache and time.time() - _cache[key][0] < ttl:
         return _cache[key][1]
-    cookies = {"uev2.loc": urllib.parse.quote(json.dumps(_location()))}
-    sid = _env("UBER_EATS_SID")
-    if sid:
-        cookies["sid"] = sid
-    with httpx.Client(headers=_headers(), cookies=cookies, timeout=20) as c:
+    cookies = _cookies()
+    headers = _headers()
+    loc = _location()
+    headers["x-uber-device-location-latitude"] = str(loc.get("latitude", ""))
+    headers["x-uber-device-location-longitude"] = str(loc.get("longitude", ""))
+    
+    if curl_requests is not None:
+        try:
+            s = curl_requests.Session(impersonate="chrome124")
+            r = s.post(API + endpoint, headers=headers, cookies=cookies, json=body, timeout=25)
+            j = r.json()
+            if j.get("status") == "success":
+                if ttl:
+                    _cache[key] = (time.time(), j["data"])
+                return j["data"]
+            elif j.get("status") == "failure" and "data" in j and "message" in j["data"]:
+                raise RuntimeError(f"Uber Eats {endpoint}: {j['data']['message']}")
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+
+    with httpx.Client(headers=headers, cookies=cookies, timeout=20) as c:
         r = c.post(API + endpoint, json=body)
     try:
         j = r.json()
@@ -110,7 +154,9 @@ def _store_summary(st: dict) -> dict:
             "rating": (pay.get("ratingInfo") or {}).get("storeRatingScore"),
             "reviews": (pay.get("ratingInfo") or {}).get("ratingCount"),
             "eta_min": eta.get("min"), "eta_max": eta.get("max"), "meta": meta, "promos": signs,
-            "accepting": state not in ("NOT_ACCEPTING_ORDERS", "CLOSED") and pay.get("isOrderable", True),
+            # Signed-out feeds tag every store NOT_ACCEPTING_ORDERS even when open (the store page says isOpen);
+            # only a real closure or isOrderable=false means he can't order.
+            "accepting": state not in ("STORE_CLOSED", "CLOSED") and pay.get("isOrderable", True) is not False,
             "state": state, "url": "https://www.ubereats.com" + (st.get("actionUrl") or "")}
 
 

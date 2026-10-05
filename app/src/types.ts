@@ -10,6 +10,10 @@ export interface Card {
   createdAt: number;
   status?: "pending" | "executed" | "cancelled" | "failed" | "expired";
   result?: any;
+  /** Drill-down: the card this one was opened from (Back restores it in place). */
+  parent?: Card;
+  /** Open already maximized (the parent was maximized when he clicked into it). */
+  openMax?: boolean;
 }
 
 export interface ToolEvent {

@@ -48,6 +48,7 @@ _ACTION_DONE = {
     "gmail_send": "Sent, sir.", "gmail_send_draft": "Draft sent.", "gmail_reply": "Reply sent.",
     "gmail_trash": "Moved to trash.", "gmail_delete_permanently": "Permanently deleted.",
     "calendar_create": "Event created and invitations sent.", "calendar_delete": "Event deleted.",
+    "calendar_update": "Event updated and guests notified.",
     "drive_share": "Shared.", "drive_trash": "Moved to trash.", "sheets_write": "Sheet updated.",
     "flight_book": "Booked, sir. The confirmation is on screen.", "hotel_book": "Your room is booked, sir.",
     "car_rental_book": "The car is reserved, sir.", "restaurant_book": "Your table is booked, sir.",

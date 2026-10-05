@@ -165,7 +165,7 @@ function usePlayer(card: Card, kind: "music" | "video", firstId: string, handler
   const [info, setInfo] = useState<YTInfo>({ state: -1, time: 0, duration: 0, volume: media.volume, muted: false, title: "" });
   const h = useRef(handlers);
   h.current = handlers;
-  const [src] = useState(() => embedUrl(firstId, { controls: kind === "video" }));
+  const [src] = useState(() => embedUrl(firstId, { controls: kind === "video", paused: !!card.data?.paused }));
 
   useEffect(() => {
     const f = frame.current;
@@ -174,7 +174,7 @@ function usePlayer(card: Card, kind: "music" | "video", firstId: string, handler
       f,
       (i) => setInfo((p) => ({ ...p, ...i })),
       (ev, v) => {
-        if (ev === "ready") { media.activate(card.id); a.command("playVideo"); }
+        if (ev === "ready" && !card.data?.paused) { media.activate(card.id); a.command("playVideo"); }
         if (ev === "state" && v === PLAYING && !media.isActive(card.id)) media.activate(card.id);
         if (ev === "state" && v === ENDED) h.current.onEnded?.();
         if (ev === "error") h.current.onError?.(v ?? 0);
@@ -246,7 +246,7 @@ export function MusicCard({ card }: { card: Card }) {
   const idxRef = useRef(0);
   const toast = useStore((s) => s.toast);
   // Browsing an artist / album is an overlay ON this card: the YouTube player underneath keeps playing.
-  const [views, setViews] = useState<View[]>([]);
+  const [views, setViews] = useState<View[]>(d.start_view === "library" ? [{ type: "library" }] : []);
   const openView = (v: View) => setViews((vs) => [...vs, v]);
   const go = (i: number, list = qRef.current) => {
     if (i < 0 || i >= list.length) return;
@@ -592,6 +592,19 @@ function views(n: number | null) {
 export function VideoCard({ card }: { card: Card }) {
   const d = card.data || {};
   const results: Vid[] = d.results || [];
+  const [q, setQ] = useState(d.query || "");
+  const [busy, setBusy] = useState(false);
+  const find = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    setBusy(true);
+    const r = await core.rpc("youtube_find", { query: q });
+    setBusy(false);
+    if (r.ok && r.result?.results?.length) {
+      core.patchCard(card.id, { ...r.result, paused: false }, r.result.query ? `YouTube · ${r.result.query}` : "YouTube · Home");
+      idxRef.current = 0; setIdx(0);
+      p.cmd("loadVideoById", [r.result.results[0].video_id, 0]);
+    } else toast({ text: r.error || `No videos for “${q}”.`, error: true });
+  };
   const [idx, setIdx] = useState(0);
   const idxRef = useRef(0);
   const toast = useStore((s) => s.toast);
@@ -613,6 +626,11 @@ export function VideoCard({ card }: { card: Card }) {
   if (!v) return <div className="fx-empty">No video.</div>;
   return (
     <div className="md md-video">
+      <form className="md-search md-vsearch" onSubmit={find} onClick={stop}>
+        <span>⌕</span>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search YouTube" />
+        {busy ? <span className="cx-spin" /> : q && <button type="button" className="md-ic" title="Clear" onClick={() => setQ("")}>×</button>}
+      </form>
       <div className="md-screen">
         <iframe ref={p.frame} src={p.src} title="YouTube player" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" />
       </div>
@@ -626,7 +644,7 @@ export function VideoCard({ card }: { card: Card }) {
       </div>
       {results.length > 1 && (
         <div className="md-vlist">
-          <div className="fx-sec">MORE RESULTS{d.query ? ` · “${d.query}”` : ""}</div>
+          <div className="fx-sec">{d.home === "subscriptions" && !d.query ? "FROM YOUR SUBSCRIPTIONS" : d.home ? "TRENDING" : "MORE RESULTS"}{d.query ? ` · “${d.query}”` : ""}</div>
           <div className="md-vgrid">
             {results.map((x, j) => j !== idx && (
               <button key={x.video_id} className="md-vrow" onClick={(e) => { stop(e); go(j); }}>

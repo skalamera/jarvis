@@ -5,6 +5,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import type { Card } from "../types";
 import { core } from "../ws/core";
+import { useStore } from "../state/store";
+import { SearchBar } from "./SearchBar";
 
 const usd = (v?: number | null) => (v == null ? "" : `$${v.toFixed(2)}`);
 const go = (op: string, args: Record<string, unknown>) => core.direct(`eats_${op}`, args);
@@ -12,8 +14,17 @@ const go = (op: string, args: Record<string, unknown>) => core.direct(`eats_${op
 export function EatsStoresCard({ card }: { card: Card }) {
   const d = card.data ?? {};
   const stores: any[] = d.stores ?? [];
+  const [busy, setBusy] = useState(false);
+  const search = async (q: string) => {
+    setBusy(true);
+    const r = await core.rpc("eats_find", { query: q });
+    setBusy(false);
+    if (r.ok) core.patchCard(card.id, r.result, `Uber Eats · ${q || "Near you"}`);
+    else useStore.getState().toast({ text: r.error || "Search failed", error: true });
+  };
   return (
     <div className="ue">
+      <SearchBar value={d.query} placeholder="Search food, dishes or restaurants" busy={busy} onSearch={search} />
       {d.deliver_to && <div className="ue-to">Delivering to <b>{d.deliver_to}</b></div>}
       <div className="ue-grid">
         {stores.map((s, i) => (

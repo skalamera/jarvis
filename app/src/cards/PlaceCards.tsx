@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { core } from "../ws/core";
 import { useStore } from "../state/store";
 import type { Card } from "../types";
+import { SearchBar } from "./SearchBar";
 
 /* Google Places cards, laid out like Google's knowledge panel: header line (stars · reviews · price · type · open),
    photo mosaic, map, hours, review summary + reviews, and Call / Website / Directions / Reserve.
@@ -53,9 +54,19 @@ function HeaderLine({ p }: { p: any }) {
 export function PlacesList({ card }: { card: Card }) {
   const d = card.data || {};
   const [loading, setLoading] = useState<string | null>(null);
-  if (!d.places?.length) return <div className="muted">Nothing found.</div>;
+  const [busy, setBusy] = useState(false);
+  const search = async (q: string) => {
+    setBusy(true);
+    const r = await core.rpc("places_find", { query: q });
+    setBusy(false);
+    if (r.ok) core.patchCard(card.id, r.result, `${q || "Places"} · near ${r.result.near || "you"}`);
+    else useStore.getState().toast({ text: r.error || "Search failed", error: true });
+  };
+  const bar = <SearchBar value={d.query === "popular places" ? "" : d.query} placeholder="Search places (coffee, gas, parks…)" busy={busy} onSearch={search} />;
+  if (!d.places?.length) return <div className="pl-list">{bar}<div className="muted">Nothing found.</div></div>;
   return (
     <div className="pl-list">
+      {bar}
       {d.places.map((p: any) => (
         <button key={p.id} className={`pl-row ${loading === p.id ? "loading" : ""}`}
           onClick={() => { setLoading(p.id); core.openPlace(p.id); window.setTimeout(() => setLoading(null), 6000); }}>
