@@ -138,15 +138,18 @@ def accounts_list() -> list[dict]:
 
 # ====================================================================== Gmail: read
 
-def gmail_search(account: str, query: str = "in:inbox", max_results: int = 10, show: bool = True) -> dict:
+def gmail_search(account: str, query: str = "in:inbox", max_results: int = 10, show: bool = True,
+                 page_token: str = "") -> dict:
     account = resolve_account(account)
     gm = service("gmail", account)
     max_results = max(1, min(int(max_results), 50))
-    resp = gm.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
+    resp = gm.users().messages().list(userId="me", q=query, maxResults=max_results,
+                                      **({"pageToken": page_token} if page_token else {})).execute()
     ids = [m["id"] for m in resp.get("messages", [])]
     msgs = [_message_summary(m) for m in _batch_get(gm, ids)]
     result = {"account": account, "email": account_email(account), "query": query,
-              "result_size_estimate": resp.get("resultSizeEstimate", len(msgs)), "messages": msgs}
+              "result_size_estimate": resp.get("resultSizeEstimate", len(msgs)), "messages": msgs,
+              "next_page_token": resp.get("nextPageToken") or ""}
     if not show:  # internal lookup (e.g. contacts fallback): no HUD card
         return result
     return _feed("gmail_search", account, {"query": query, "max_results": max_results}, result)

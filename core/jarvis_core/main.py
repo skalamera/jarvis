@@ -18,7 +18,8 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
-from jarvis_google import artifacts, calendar_ops, code, mail_compose, markets, media, places, pylon, routes, sports, store
+from jarvis_google import trips
+from jarvis_google import artifacts, calendar_ops, career_ops, code, kalshi, kalshi_auto, mail_compose, markets, media, places, pylon, routes, sports, store
 from jarvis_google import tools as gtools
 from jarvis_google.accounts import linked_accounts
 
@@ -45,7 +46,9 @@ async def lifespan(app: FastAPI):
     await STATE["voice"].resolve()  # before accepting clients, so the very first sentence uses the right voice
     STATE["wake"] = await asyncio.to_thread(WakeWord, settings.wake_threshold)
     asyncio.create_task(STATE["voice"].warm())
+    asyncio.create_task(asyncio.to_thread(kalshi._all_events))  # warm the Kalshi catalog (~10s) off the hot path
     briefing.start()
+    kalshi_auto.start()  # BTC 15-min autopilot thread (idle unless he turned it on)
     log.info("JARVIS core up. hermes=%s voice=%s wake=%s", settings.hermes_url, settings.voice_url,
              STATE["wake"].available)
     yield
@@ -363,7 +366,7 @@ async def ws_endpoint(ws: WebSocket):
                           "crypto_chart": markets.crypto_chart, "trade_chart": trading.chart,
                           "trade_preview": trading.preview, "trade_book": trading.orderbook,
                           "game_refresh": sports.game_summary,
-                          **__import__("jarvis_google.launch", fromlist=["RPC"]).RPC,
+                          **__import__("jarvis_google.launch", fromlist=["RPC"]).RPC, **trips.RPC,
                           "trade_history": trading.trade_history,
                           "music_artist": media.music_artist, "music_album": media.music_album,
                           "music_find": media.music_find, "music_radio": media.music_radio,
@@ -486,7 +489,7 @@ async def ws_endpoint(ws: WebSocket):
                 # click-only ops on file / code cards (allow-listed); writes are versioned + audit-logged
                 async def run_ws(d=data):
                     op, args, req = str(d.get("op", "")), dict(d.get("args") or {}), d.get("req")
-                    fn = artifacts.CLICK_OPS.get(op) or code.CLICK_OPS.get(op) or calendar_ops.CLICK_OPS.get(op) or mail_compose.CLICK_OPS.get(op)
+                    fn = artifacts.CLICK_OPS.get(op) or code.CLICK_OPS.get(op) or calendar_ops.CLICK_OPS.get(op) or mail_compose.CLICK_OPS.get(op) or kalshi.CLICK_OPS.get(op) or kalshi_auto.CLICK_OPS.get(op) or career_ops.CLICK_OPS.get(op) or trips.CLICK_OPS.get(op)
                     try:
                         r = {"ok": True, "result": await asyncio.to_thread(fn, **args)} if fn else {"ok": False, "error": "operation not allowed"}
                     except Exception as e:

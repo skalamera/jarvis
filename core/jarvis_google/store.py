@@ -228,6 +228,8 @@ def execute_action(action_id: str, source: str) -> dict:
     from . import travel, trading
     travel.register_executors()  # idempotent; survives a reload of this module (tests)
     trading.register_executors()
+    from . import kalshi
+    kalshi.register_executors()
 
     action = _claim(action_id, "executing")
     if action is None:

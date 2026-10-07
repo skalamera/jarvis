@@ -549,10 +549,10 @@ class CoreLink {
   }
 
   /** Read-only HUD request (allow-listed in Core), e.g. recompute directions for another travel mode. */
-  rpc(op: string, args: Record<string, unknown>): Promise<{ ok: boolean; result?: any; error?: string }> {
+  rpc(op: string, args: Record<string, unknown>, timeoutMs = 60_000): Promise<{ ok: boolean; result?: any; error?: string }> {
     const req = `r${++this.pylonSeq}`;
     return new Promise((resolve) => {
-      const timer = window.setTimeout(() => { this.pylonWait.delete(req); resolve({ ok: false, error: "Timed out waiting for Core." }); }, 60_000);
+      const timer = window.setTimeout(() => { this.pylonWait.delete(req); resolve({ ok: false, error: "Timed out waiting for Core." }); }, timeoutMs);
       this.pylonWait.set(req, (m) => { window.clearTimeout(timer); resolve(m); });
       this.send({ type: "rpc", op, args, req });
     });

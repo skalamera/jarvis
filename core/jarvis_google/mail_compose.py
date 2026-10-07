@@ -205,9 +205,33 @@ def mail_discard_draft(account: str, draft_id: str) -> dict:
     return {"status": "discarded"}
 
 
-def mail_inbox(account: str, query: str = "in:inbox", max_results: int = 25) -> dict:
+def mail_inbox(account: str, query: str = "in:inbox", max_results: int = 25, page_token: str = "") -> dict:
     from .tools import gmail_search
-    return gmail_search(account, query, max_results, show=False)
+    return gmail_search(account, query, max_results, show=False, page_token=page_token)
+
+
+_BULK = {"archive": ([], ["INBOX"]), "unarchive": (["INBOX"], []), "read": ([], ["UNREAD"]), "unread": (["UNREAD"], []),
+         "star": (["STARRED"], []), "unstar": ([], ["STARRED"]), "important": (["IMPORTANT"], []),
+         "spam": (["SPAM"], ["INBOX"]), "trash": (["TRASH"], []), "untrash": ([], ["TRASH"])}
+
+
+def mail_bulk(account: str, message_ids: list[str], action: str) -> dict:
+    """Bulk action he clicked on selected messages (trash is recoverable for 30 days; undo = the inverse action)."""
+    if action not in _BULK:
+        raise ValueError(f"unknown action {action}")
+    ids = [str(i) for i in message_ids][:1000]
+    if not ids:
+        return {"status": "noop", "count": 0}
+    account = resolve_account(account)
+    gm = service("gmail", account)
+    add, remove = _BULK[action]
+    if action == "untrash":
+        for i in ids:
+            gm.users().messages().untrash(userId="me", id=i).execute()
+    else:
+        gm.users().messages().batchModify(userId="me", body={"ids": ids, "addLabelIds": add, "removeLabelIds": remove}).execute()
+    _click_audit(f"mail_bulk_{action}", account, count=len(ids), message_ids=ids)
+    return {"status": action, "count": len(ids)}
 
 
 def mail_contacts(account: str, q: str) -> list[dict]:
@@ -227,4 +251,4 @@ def mail_contacts(account: str, q: str) -> list[dict]:
 
 CLICK_OPS = {"mail_html": mail_html, "mail_context": mail_context, "mail_ai_reply": mail_ai_reply,
              "mail_send": mail_send, "mail_save_draft": mail_save_draft, "mail_discard_draft": mail_discard_draft,
-             "mail_inbox": mail_inbox, "mail_contacts": mail_contacts}
+             "mail_inbox": mail_inbox, "mail_bulk": mail_bulk, "mail_contacts": mail_contacts}

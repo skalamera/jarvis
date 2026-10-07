@@ -96,7 +96,8 @@ def classify_confirmation(text: str) -> str | None:
 
 
 # Tools whose displays may land after the turn ended (rendered in the background).
-BACKGROUND_TOOLS = {"video_generate", "video_analyze", "booking", "trade_alert", "trade_order_placed", "trade_desk", "trade_orders"}
+BACKGROUND_TOOLS = {"video_generate", "video_analyze", "booking", "trade_alert", "trade_order_placed", "trade_desk", "trade_orders",
+                    "trip_plan", "trip_revise"}
 
 class Session:
     def __init__(self, send: Send, hermes: HermesClient, voice: Voice):
@@ -599,6 +600,9 @@ class Session:
                 self.focus = {"type": "file", "id": a["id"], "filename": a["filename"], "kind": a["kind"]}
             for c in V.cards_from_feed(item):
                 await self.send({"type": "card", "turn_id": turn_id, "card": c})
+            if item["tool"] in ("trip_plan", "trip_revise") and res.get("announce") and turn_id == "background" \
+                    and not self.sleeping:
+                asyncio.create_task(self.say_line(res["announce"]))
             if item["tool"] == "video_analyze" and res.get("announce"):
                 # a long video finished after the turn ended: say the result, and keep it for follow-ups
                 self.notes.append(f"Video analysis finished ({(res.get('video') or {}).get('filename')}): {res['announce']}")

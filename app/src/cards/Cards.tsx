@@ -66,22 +66,75 @@ function TrashBtn({ account, id }: { account?: string | null; id: string }) {
 }
 
 // ------------------------------------------------------------------------ email list
+const UNDO: Record<string, string> = { trash: "untrash", archive: "unarchive", spam: "unarchive", read: "unread", unread: "read", star: "unstar", unstar: "star" };
+const REMOVES = new Set(["trash", "archive", "spam"]);
+
 export function EmailList({ card }: { card: Card }) {
   const msgs: any[] = card.data?.messages ?? [];
   const [gone, setGone] = useState<Set<string>>(new Set());
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [anchor, setAnchor] = useState<string | null>(null);
   const [q, setQ] = useState(card.data?.query && card.data.query !== "in:inbox" ? card.data.query : "");
   const [busy, setBusy] = useState(false);
+  const [more, setMore] = useState(false);
   const [compose, setCompose] = useState(false);
+  const sentinel = useRef<HTMLDivElement>(null);
   const acct = card.account || "personal";
-  const load = async (account: string, query: string) => {
+  const query = card.data?.query || "in:inbox";
+  const next = card.data?.next_page_token || "";
+  const toast = (t: any) => useStore.getState().toast(t);
+  const patch = (fn: (d: any) => any, extra: Partial<Card> = {}) => {
+    const s = useStore.getState();
+    s.set({ cards: s.cards.map((c) => (c.id === card.id ? { ...c, ...extra, data: fn(c.data || {}) } : c)) });
+  };
+  const load = async (account: string, qq: string) => {
     setBusy(true);
-    const r = await core.workspace("mail_inbox", { account, query: query.trim() || "in:inbox", max_results: 25 });
+    const r = await core.workspace("mail_inbox", { account, query: qq.trim() || "in:inbox", max_results: 25 });
     setBusy(false);
     if (r.ok) {
-      const s = useStore.getState();
-      s.set({ cards: s.cards.map((c) => (c.id === card.id ? { ...c, account, title: query.trim() ? `${query} · ${account}` : `Inbox · ${account}`, data: { ...r.result, query: query.trim() || "in:inbox" } } : c)) });
-      setGone(new Set());
-    } else useStore.getState().toast({ text: r.error || "Couldn't load mail.", error: true });
+      patch(() => ({ ...r.result, query: qq.trim() || "in:inbox" }), { account, title: qq.trim() ? `${qq} · ${account}` : `Inbox · ${account}` });
+      setGone(new Set()); setSel(new Set());
+    } else toast({ text: r.error || "Couldn't load mail.", error: true });
+  };
+  // lazy loading: when the end of the list scrolls into view, fetch the next page and append it
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el || !next) return;
+    const io = new IntersectionObserver(async (es) => {
+      if (!es[0].isIntersecting || more) return;
+      setMore(true);
+      const r = await core.workspace("mail_inbox", { account: acct, query, max_results: 25, page_token: next });
+      setMore(false);
+      if (r.ok) patch((d) => {
+        const have = new Set((d.messages || []).map((m: any) => m.id));
+        return { ...d, messages: [...(d.messages || []), ...r.result.messages.filter((m: any) => !have.has(m.id))], next_page_token: r.result.next_page_token };
+      });
+    }, { rootMargin: "300px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [next, acct, query, more]);
+
+  const shown = msgs.filter((m) => !gone.has(m.id));
+  const toggle = (id: string, shift: boolean) => {
+    const n = new Set(sel);
+    if (shift && anchor) {
+      const ids = shown.map((m) => m.id);
+      const [i, j] = [ids.indexOf(anchor), ids.indexOf(id)].sort((x, y) => x - y);
+      if (i >= 0) ids.slice(i, j + 1).forEach((x) => n.add(x));
+    } else if (n.has(id)) n.delete(id); else n.add(id);
+    setSel(n); setAnchor(id);
+  };
+  const allOn = shown.length > 0 && shown.every((m) => sel.has(m.id));
+  const bulk = async (action: string, ids = [...sel]) => {
+    if (!ids.length) return;
+    const r = await core.workspace("mail_bulk", { account: acct, message_ids: ids, action });
+    if (!r.ok) { toast({ text: r.error || "That didn't work.", error: true }); return; }
+    if (REMOVES.has(action)) setGone((g) => new Set([...g, ...ids]));
+    if (action === "read" || action === "unread") patch((d) => ({ ...d, messages: d.messages.map((m: any) => (ids.includes(m.id) ? { ...m, unread: action === "unread" } : m)) }));
+    if (action === "unarchive" || action === "untrash") setGone((g) => new Set([...g].filter((x) => !ids.includes(x))));
+    setSel(new Set());
+    const verb: Record<string, string> = { trash: "Moved to Trash", archive: "Archived", spam: "Reported spam", read: "Marked read", unread: "Marked unread", star: "Starred", unstar: "Unstarred" };
+    if (verb[action]) toast({ text: `${verb[action]}: ${ids.length} conversation${ids.length > 1 ? "s" : ""}`, onUndo: UNDO[action] ? () => bulk(UNDO[action], ids) : undefined });
   };
   return (
     <div className="list">
@@ -98,14 +151,34 @@ export function EmailList({ card }: { card: Card }) {
         <button className="cs-go" onClick={() => load(acct, q)} title="Refresh">⟳</button>
         <button className="cs-go mc-new" onClick={() => setCompose(true)}>✎ Compose</button>
       </div>
+      <div className={`ml-bulk ${sel.size ? "on" : ""}`} onClick={(e) => e.stopPropagation()}>
+        <label className="ml-ck" title={allOn ? "Clear selection" : "Select all loaded"}>
+          <input type="checkbox" checked={allOn} ref={(el) => { if (el) el.indeterminate = sel.size > 0 && !allOn; }}
+            onChange={() => setSel(allOn ? new Set() : new Set(shown.map((m) => m.id)))} />
+        </label>
+        {sel.size ? (
+          <>
+            <span className="ml-count">{sel.size} selected</span>
+            <button onClick={() => bulk("trash")} title="Delete">🗑 Delete</button>
+            <button onClick={() => bulk("archive")} title="Archive">⇩ Archive</button>
+            <button onClick={() => bulk("read")}>✓ Read</button>
+            <button onClick={() => bulk("unread")}>● Unread</button>
+            <button onClick={() => bulk("star")}>★ Star</button>
+            <button onClick={() => bulk("spam")}>⚠ Spam</button>
+            <button className="ml-clear" onClick={() => setSel(new Set())}>Clear</button>
+          </>
+        ) : (
+          <span className="ml-count muted">{shown.length} loaded{card.data?.result_size_estimate > shown.length ? ` of ~${Number(card.data.result_size_estimate).toLocaleString()}` : ""} · shift-click to select a range</span>
+        )}
+      </div>
       {compose && <MailComposer init={{ account: acct, mode: "new" }} onClose={() => setCompose(false)} />}
-      {!msgs.length && <div className="muted">No messages match.</div>}
-      {card.data?.result_size_estimate > msgs.length && (
-        <div className="list-meta">Showing {msgs.length} of ~{Number(card.data.result_size_estimate).toLocaleString()}</div>
-      )}
-      {msgs.filter((m) => !gone.has(m.id)).map((m, i) => (
-        <div key={m.id} className={`row email-row ${m.unread ? "unread" : ""}`} style={{ animationDelay: `${i * 45}ms` }}
-          onClick={() => core.direct("gmail_read", { account: acct, message_id: m.id })}>
+      {!shown.length && !busy && <div className="muted">No messages match.</div>}
+      {shown.map((m, i) => (
+        <div key={m.id} className={`row email-row ${m.unread ? "unread" : ""} ${sel.has(m.id) ? "sel" : ""}`} style={{ animationDelay: `${Math.min(i, 25) * 30}ms` }}
+          onClick={(e) => { if (sel.size || e.metaKey || e.shiftKey) { toggle(m.id, e.shiftKey); return; } core.direct("gmail_read", { account: acct, message_id: m.id }); }}>
+          <label className="ml-ck" onClick={(e) => { e.stopPropagation(); }}>
+            <input type="checkbox" checked={sel.has(m.id)} onChange={() => {}} onClick={(e) => toggle(m.id, (e as any).shiftKey)} />
+          </label>
           <div className="avatar">{initials(m.from_name || m.from_email)}</div>
           <div className="row-main">
             <div className="row-top">
@@ -116,12 +189,13 @@ export function EmailList({ card }: { card: Card }) {
             <div className="snippet">{m.snippet}</div>
           </div>
           <div className="row-actions" onClick={(e) => e.stopPropagation()}>
-            {m.unread && <button title="Mark read" onClick={() => { core.direct("gmail_modify", { account: acct, message_ids: [m.id], mark_read: true }); m.unread = false; setGone(new Set(gone)); }}>✓</button>}
-            <button title="Archive" onClick={() => { core.direct("gmail_modify", { account: acct, message_ids: [m.id], archive: true }); setGone(new Set([...gone, m.id])); }}>⇩</button>
-            <TrashIcon account={acct} id={m.id} />
+            <button title={m.unread ? "Mark read" : "Mark unread"} onClick={() => bulk(m.unread ? "read" : "unread", [m.id])}>{m.unread ? "✓" : "●"}</button>
+            <button title="Archive" onClick={() => bulk("archive", [m.id])}>⇩</button>
+            <button title="Delete" onClick={() => bulk("trash", [m.id])}>🗑</button>
           </div>
         </div>
       ))}
+      <div ref={sentinel} className="ml-more">{more ? <><span className="cx-spin" /> Loading more…</> : next ? "" : shown.length > 25 ? "End of results" : ""}</div>
     </div>
   );
 }

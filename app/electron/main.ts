@@ -261,7 +261,7 @@ app.whenReady().then(async () => {
       delete (prefs as any).preload;
       prefs.nodeIntegration = false;
       prefs.contextIsolation = true;
-      if (!/^https:\/\//.test(params.src || "")) _ev.preventDefault();
+      if (!/^https:\/\//.test(params.src || "") && !/^http:\/\/127\.0\.0\.1:3077(\/|$)/.test(params.src || "")) _ev.preventDefault();
     });
     if (wc.getType() === "webview") {
       wc.setUserAgent(wc.getUserAgent().replace(/\s?Electron\/\S+/, "").replace(/\s?J\.A\.R\.V\.I\.S\/\S+/, ""));

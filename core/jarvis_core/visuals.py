@@ -151,6 +151,12 @@ def cards_from_feed(item: dict) -> list[dict]:
     if tool in ("trade_alert", "trade_order_placed") and r.get("kind") in ("trade_alert", "trade_order"):
         title = "Order placed" if r["kind"] == "trade_order" else "Market alert"
         return [card(r["kind"], title, r)]
+    if tool in ("trip_plan", "trip_revise", "trip_show") and r.get("kind") == "trip":
+        return [card("trip", r.get("title") or "Trip planner", r)]
+    if tool == "career_ops" and r.get("kind") == "career_ops":
+        return [card("career_ops", "Career Ops", r)]
+    if tool == "kalshi" and r.get("kind") == "kalshi":
+        return [card("kalshi", "Kalshi", r)]
     if tool == "eats_search" and r.get("kind") == "eats_stores":
         return [card("eats_stores", f"Uber Eats · {r.get('query') or 'Near you'}", r)]
     if tool == "eats_menu" and r.get("kind") == "eats_menu":

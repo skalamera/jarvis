@@ -7,6 +7,9 @@ import { motion } from "framer-motion";
 import { useStore } from "../state/store";
 import type { Card } from "../types";
 import { WebAppCard } from "./WebAppCard";
+import { KalshiCard } from "./KalshiCards";
+import { CareerOpsCard } from "./CareerOpsCard";
+import { TripCard } from "./TripCard";
 import { CalendarCard, LaunchFilesCard, ConfirmCard, DocumentCard, DraftEditor, EmailList, EmailView, FilesCard, NoticeCard, ThreadView, acctTag } from "./Cards";
 import { ChartCard, ImageCard, LinkCard, ListCard, StatsCard, TableCard, VisualMarkdown } from "./Visuals";
 import { MapCard } from "./MapCard";
@@ -37,6 +40,9 @@ const BODY: Record<string, (p: { card: Card }) => React.ReactElement> = {
   calendar: CalendarCard,
   launch_files: LaunchFilesCard,
   webapp: WebAppCard,
+  kalshi: KalshiCard,
+  career_ops: CareerOpsCard,
+  trip: TripCard,
   files: FilesCard,
   document: DocumentCard,
   notice: NoticeCard,
@@ -91,7 +97,7 @@ const BODY: Record<string, (p: { card: Card }) => React.ReactElement> = {
 };
 
 const KIND_LABEL: Record<string, string> = {
-  email_list: "MAIL", email: "MESSAGE", thread: "THREAD", draft: "DRAFT", confirm: "AUTHORIZE", calendar: "CALENDAR", launch_files: "FILES", webapp: "WEB APP",
+  email_list: "MAIL", email: "MESSAGE", thread: "THREAD", draft: "DRAFT", confirm: "AUTHORIZE", calendar: "CALENDAR", launch_files: "FILES", webapp: "WEB APP", kalshi: "KALSHI", career_ops: "CAREER OPS", trip: "TRIP PLANNER",
   files: "DRIVE", document: "DOCUMENT", notice: "STATUS", "visual.chart": "ANALYSIS", "visual.stats": "TELEMETRY",
   "visual.table": "DATA", "visual.list": "INDEX", "visual.image": "IMAGE", "visual.link": "LINK", "visual.markdown": "BRIEF", "visual.map": "NAVIGATION", weather: "WEATHER", pylon_list: "PYLON", pylon_ticket: "TICKET", places: "PLACES", place: "PLACE", directions: "ROUTE", stock: "MARKETS", stock_compare: "COMPARE", market: "MARKETS", crypto: "CRYPTO", slack: "SLACK", sports_game: "SPORTS", sports_scoreboard: "SCORES", music: "MUSIC", video: "VIDEO", artifact: "FILE", codebase: "CODEBASE", code_file: "SOURCE", code_changes: "CHANGES", support_blueprint: "BLUEPRINT", car_listings: "LISTINGS", garage: "GARAGE", eats_stores: "UBER EATS", trade_desk: "TRADING DESK", trade_insights: "INTELLIGENCE", trade_alert: "MARKET ALERT", trade_order: "ORDER", trade_orders: "ORDERS", eats_menu: "MENU", eats_cart: "CART", garage_search: "RECORDS", garage_diagnosis: "DIAGNOSTICS", video_analysis: "VIDEO ANALYSIS", garage_plan: "BUILD PLAN", generating: "STUDIO", travel_flights: "FLIGHTS", travel_hotels: "HOTELS", travel_car_rentals: "RENTALS", travel_restaurants: "RESERVATIONS", booking_confirmed: "BOOKED", travel_reservations: "ITINERARY",
 };

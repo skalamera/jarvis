@@ -518,6 +518,77 @@ def image_edit(artifact_id: str, ops: list[dict], note: str = "") -> str:
     return _safe(AR.image_edit, artifact_id=artifact_id, ops=ops, note=note)
 
 
+# ------------------------------------------------------------------ career-ops (job search)
+@mcp.tool()
+def career_ops(add_job_url: str = "", company: str = "", role: str = "") -> str:
+    """His career-ops job search (local, github.com/career-ops-hq/career-ops): opens the CAREER OPS display with his
+    pipeline (applications by status, top-scored roles, inbox). add_job_url queues a posting for evaluation. It never
+    applies or submits anything; he evaluates / tailors / applies inside the display."""
+    from . import career_ops as CO
+    def run():
+        added = CO.add_job(add_job_url, company, role) if add_job_url else None
+        return {**CO.show(), **({"added": added} if added else {})}
+    return _safe(run)
+
+
+# ------------------------------------------------------------------ trip planner
+@mcp.tool()
+def trip_plan(request: str) -> str:
+    """Plan a trip from his description (destination, dates, who, budget, themes like 'by the water' / 'no hiking').
+    Opens a live TRIP PLANNER display at once and researches in the background (~2 min): weather/what to wear,
+    getting there, hotels with prices, car rentals, events on those dates, sights, restaurants, then THREE
+    hour-by-hour itineraries with breakfast/lunch/dinner. The finished plan is announced automatically. Pass his
+    words through as `request` (add nothing he didn't say)."""
+    from . import trips
+    return _safe(trips.start_plan, request=request)
+
+
+@mcp.tool()
+def trip_revise(instruction: str, trip_id: str = "") -> str:
+    """Change the trip plan on screen by description: 'use the Hotel Indigo instead', 'more outdoor stuff', 'no
+    hiking', 'swap day 2 and 3', 'make B cheaper', 'move it a week later', 'add a sunset cruise'. Rebuilds the
+    affected itineraries (~1 min) and announces when done. trip_id = '' means the most recent trip."""
+    from . import trips
+    return _safe(trips.start_revise, instruction=instruction, trip_id=trip_id)
+
+
+@mcp.tool()
+def trip_show(trip_id: str = "") -> str:
+    """Re-open a planned trip (default the most recent) and return its options; also lists saved trips."""
+    from . import trips
+    def run():
+        t = trips.trip_get(trip_id)
+        trips.store.record_result("trip_show", None, {"trip_id": t["id"]}, t)
+        return {**trips._summary(t), "saved_trips": trips.trip_list()["trips"][:8]}
+    return _safe(run)
+
+
+# ------------------------------------------------------------------ Kalshi (prediction markets + perps)
+@mcp.tool()
+def kalshi_markets(query: str = "", ticker: str = "") -> str:
+    """Kalshi prediction markets: opens the KALSHI display (trending events, movers, perps, his account when connected).
+    query = search events (e.g. 'bitcoin', 'fed rate', 'super bowl'); ticker = focus one market. Returns top events
+    with their leading outcomes and implied chances (price = probability). Read-only."""
+    from . import kalshi as KS
+    return _safe(lambda: KS.show("home", query=query, ticker=ticker))
+
+
+@mcp.tool()
+def kalshi_order(ticker: str, outcome: str, action: str, contracts: float, price: float) -> str:
+    """Propose a Kalshi order (outcome 'yes'/'no', action 'buy'/'sell', price in dollars 0.01-0.99 per contract).
+    NEVER executes directly: it creates a confirm card; it only places after he says confirm / clicks Authorize."""
+    from . import kalshi as KS
+    return _safe(lambda: KS.propose_order(ticker, outcome, action, contracts, price))
+
+
+@mcp.tool()
+def kalshi_autopilot(turn_off: bool = False) -> str:
+    """Status of his Kalshi BTC 15-min autopilot (rules, ON/OFF, today's P&L, recent trades). turn_off=true stops it.
+    Turning it ON is only done by his click in the Kalshi display (Autopilot tab), never by voice."""
+    from . import kalshi_auto as KA
+    return _safe(lambda: KA.configure(enabled=False) if turn_off else KA.status())
+
+
 # ------------------------------------------------------------------ trading desk (Kraken: crypto + stocks)
 @mcp.tool()
 def trade_portfolio() -> str:
