@@ -91,6 +91,7 @@ def _step(tid: str, msg: str, done: bool = False, error: str = "") -> None:
             p = {"steps": [], "started": time.time()}
         if msg and (not p["steps"] or p["steps"][-1] != msg):
             p["steps"].append(msg)
+            p.setdefault("at", []).append(round(time.time() - p["started"], 1))
         p["done"], p["error"] = done, error
         f.write_text(json.dumps(p))
 
@@ -197,13 +198,78 @@ def _live_flights(b: dict) -> dict | None:
             "count": res.get("count"), "cheapest": res.get("cheapest"), "offers": offers}
 
 
+def _live_cars(b: dict) -> dict | None:
+    """Live rental-car prices at the destination airport (or city) for the trip dates (OctoTrip)."""
+    if b.get("transport") == "train":
+        return None
+    from . import cars_live
+    for q in ([f"{b['airport']} airport"] if b.get("airport") else []) + [b["destination"]]:
+        try:
+            r = cars_live.search(q, b["start_date"], b["end_date"], max_results=8)
+        except Exception:
+            continue
+        if r.get("cars"):
+            return {**r, "source": "octotrip"}
+    return None
+
+
+def _live_hotels(b: dict, places_hotels: list[dict]) -> dict | None:
+    """Bookable LiteAPI rates around the destination (centered on the Places hotels), when a key is set."""
+    from . import liteapi
+    if not liteapi.configured():
+        return None
+    pts = [(h["lat"], h["lng"]) for h in places_hotels if h.get("lat") is not None]
+    if not pts:
+        return None
+    lat, lng = sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
+    try:
+        return liteapi.search(lat, lng, b["start_date"], b["end_date"], adults=max(1, int(b.get("adults") or 2)),
+                              radius_m=8000, limit=40, near=b["destination"])
+    except Exception as e:
+        store.audit({"kind": "trip_liteapi_error", "error": str(e)[:200]})
+        return None
+
+
+def _merge_hotels(places_hotels: list[dict], live: dict | None) -> list[dict]:
+    """Attach live, bookable rates to the Places hotels by name; add the best-rated live-only hotels too."""
+    if not live:
+        return places_hotels
+    by = {_norm(h["name"]): h for h in live.get("hotels") or []}
+    used = set()
+    for h in places_hotels:
+        m = by.get(_norm(h["name"])) or next((v for k, v in by.items() if k and (k in _norm(h["name"]) or _norm(h["name"]) in k)), None)
+        if m:
+            used.add(_norm(m["name"]))
+            h["live"] = {k: m.get(k) for k in ("offer_id", "price", "nightly", "total", "per_night", "currency", "room",
+                                               "board", "refundable", "policy", "due_at_hotel")}
+    extra = [{"id": m["hotel_id"], "live_only": True, "name": m["name"], "photo": m.get("photo"), "rating": m.get("review_score"),
+              "reviews_count": m.get("reviews"), "short_address": m.get("address"), "lat": m.get("lat"), "lng": m.get("lng"),
+              "price": "★" * int(m["stars"]) if m.get("stars") else "",
+              "live": {k: m.get(k) for k in ("offer_id", "price", "nightly", "total", "per_night", "currency", "room",
+                                              "board", "refundable", "policy", "due_at_hotel")}}
+             for m in live.get("hotels") or [] if _norm(m["name"]) not in used][:8]
+    return places_hotels + extra
+
+
 def trip_refresh_flights(trip_id: str) -> dict:
     """Re-search live fares for a saved trip (offers expire after ~30 min). Click / RPC."""
+    """Re-search every live price on a saved trip (fares, hotel rates, rental cars); offers expire."""
     trip = _load(trip_id)
-    live = _live_flights(trip["brief"])
-    if not live:
-        raise RuntimeError("no live fares available for this trip")
-    trip["transport"]["live_flights"] = live
+    b = trip["brief"]
+    with ThreadPoolExecutor(3) as ex:
+        ff, cf = ex.submit(_live_flights, b), ex.submit(_live_cars, b)
+        base = [{k: v for k, v in h.items() if k != "live"} for h in trip.get("hotels") or [] if not h.get("live_only")]
+        hf = ex.submit(_live_hotels, b, base)
+        live, cars, hotels = ff.result(), cf.result(), hf.result()
+    if not (live or cars or hotels):
+        raise RuntimeError("no live prices available for this trip")
+    if live:
+        trip["transport"]["live_flights"] = live
+    if cars:
+        trip["transport"]["live_cars"] = cars
+    if hotels:
+        trip["hotels"] = _merge_hotels(base, hotels)
+        trip["hotels_live_at"] = time.time()
     return _card(_save(trip))
 
 
@@ -275,13 +341,19 @@ def _gather(tid: str, b: dict) -> dict:
         futs = {k: ex.submit(_places, qq, n) for k, (qq, n) in q.items()}
         wfut = ex.submit(_weather, d, b["start_date"], b["end_date"])
         ffut = ex.submit(_live_flights, b)
+        cfut = ex.submit(_live_cars, b)
         got = {k: f.result() for k, f in futs.items()}
         wx = wfut.result()
         live = ffut.result()
-    if live:
-        _step(tid, f"Found {live['count']} live fares to {live['destination']}")
+        cars = cfut.result()
     have = {h["name"] for h in got["hotels"]}
     got["hotels"] += [h for h in got.pop("hotels2") if h["name"] not in have]
+    lh = _live_hotels(b, got["hotels"])
+    if lh:
+        _step(tid, f"Found live rates at {lh['count']} hotels")
+        got["hotels"] = _merge_hotels(got["hotels"], lh)
+    if live:
+        _step(tid, f"Found {live['count']} live fares to {live['destination']}")
     _step(tid, "Researching events, transport and prices for your dates")
     res = _research(b, got["hotels"], need_climate=wx is None)
     if wx is None:
@@ -304,7 +376,8 @@ def _gather(tid: str, b: dict) -> dict:
         if s["name"] not in seen:
             seen.add(s["name"])
             dining.append(s)
-    return {"hotels": got["hotels"], "sights": sights, "dining": dining, "live_flights": live,
+    return {"hotels": got["hotels"], "sights": sights, "dining": dining, "live_flights": live, "live_cars": cars,
+            "hotels_live_at": time.time() if lh else None,
             "nightlife": got["nightlife"], "weather": wx, "research": res}
 
 
@@ -329,7 +402,8 @@ def _compose(b: dict, g: dict, instruction: str = "", current: dict | None = Non
     def rows(xs, keys):
         return [{k: x.get(k) for k in keys if x.get(k) not in (None, "")} for x in xs]
     lists = {
-        "HOTELS": rows(g["hotels"], ("name", "short_address", "rating", "price", "est_nightly", "area")),
+        "HOTELS": [{**r_, **({"live_nightly": h["live"]["nightly"], "live_total": h["live"]["price"]} if h.get("live") else {})}
+                   for h, r_ in zip(g["hotels"], rows(g["hotels"], ("name", "short_address", "rating", "price", "est_nightly", "area")))],
         "SIGHTS": rows(g["sights"], ("name", "type", "rating", "short_address")),
         "RESTAURANTS": rows(g["dining"], ("name", "type", "rating", "price", "short_address")),
         "NIGHTLIFE": rows(g["nightlife"], ("name", "type", "rating")),
@@ -343,7 +417,8 @@ def _compose(b: dict, g: dict, instruction: str = "", current: dict | None = Non
 - Day 1 starts with getting there from {b['origin']}; the last day ends with the trip home. Check-in after 15:00.
 - Respect themes {b['themes']}, must-do {b['must_do']} and avoid {b['avoid']} strictly (e.g. 'no hiking' = no trails).
 - Use events only on their actual dates. Use the weather to put outdoor things on dry days.
-- Costs are estimates for {b['adults']} adults at a {b['budget']} budget.
+- Costs are estimates for {b['adults']} adults at a {b['budget']} budget. Where a hotel has live_nightly/live_total
+  (real bookable rates) use those, and prefer hotels with live rates. Use LIVE CARS prices for any rental car.
 - The 3 itineraries should each use a different hotel when the list allows.
 - Make the 3 itineraries as DIFFERENT as possible: every restaurant and bar appears in AT MOST ONE itinerary, and
   each sight or event appears in at most one itinerary. The only exceptions are the traveller's must-do items and at
@@ -352,21 +427,84 @@ def _compose(b: dict, g: dict, instruction: str = "", current: dict | None = Non
     fares = ("\nLIVE FARES (real, bookable, round trip for all travellers; use these for flight times and costs on the "
              "travel days instead of estimates, preferring LGA, and say which flight in the transit item): " + json.dumps(
                  [{k: o[k] for k in ("airline", "price", "per_person", "out", "back")} for o in lf["offers"][:5]])) if lf else ""
-    data = f"BRIEF: {json.dumps(b)}\nWEATHER: {json.dumps(wx)}{fares}\nTRANSPORT RESEARCH: " \
-           f"{json.dumps({k: g['research'].get(k) for k in ('getting_there', 'flights', 'getting_around')})}\n" + \
-           "\n".join(f"{k}: {json.dumps(v)}" for k, v in lists.items())
+    lc = g.get("live_cars")
+    fares += ("\nLIVE CARS (real prices, whole rental): " + json.dumps(
+        [{k: c[k] for k in ("name", "category", "supplier", "price")} for c in lc["cars"][:6]])) if lc else ""
+    data_head = f"BRIEF: {json.dumps(b)}\nWEATHER: {json.dumps(wx)}{fares}\nTRANSPORT RESEARCH: " \
+                f"{json.dumps({k: g['research'].get(k) for k in ('getting_there', 'flights', 'getting_around')})}\n"
+    data = data_head + "\n".join(f"{k}: {json.dumps(v)}" for k, v in lists.items())
     if current is not None:
         ask = (f"CURRENT PLAN (JSON): {json.dumps({k: current.get(k) for k in ('summary', 'highlights', 'attire', 'transport', 'weather_summary', 'itineraries', 'chosen')})}\n"
                f"CHANGE REQUEST: {instruction}\nApply the change. Change only what the request implies (e.g. a hotel "
                f"swap rebuilds the affected itinerary's days around the new hotel's area; a new theme reworks all 3). "
                f"Keep the rest identical. Also return \"change_summary\": one sentence describing what changed.")
     else:
-        ask = "Build the plan."
-    out = _gemini([{"text": f"{rules}\n\n{data}\n\n{ask}\nReturn JSON only:\n{_TRIP_SCHEMA}"}], timeout=280)
+        # Pools are split per itinerary, so no repair pass: rewriting all three in one call is what made plans
+        # slow (it echoes every itinerary back) for little gain over the split.
+        return _compose_parallel(b, rules, data_head, lists)
+    out = _gem([{"text": f"{rules}\n\n{data}\n\n{ask}\nReturn JSON only:\n{_TRIP_SCHEMA}"}], timeout=420)
     if not isinstance(out, dict) or len(out.get("itineraries") or []) < 1:
         raise RuntimeError("the planner returned no itineraries")
     _dedupe(out, b, lists)
     return out
+
+
+def _gem(parts: list[dict], timeout: float = 300, tries: int = 2) -> Any:
+    """Gemini with one retry on a network/read timeout (long JSON answers occasionally stall)."""
+    for i in range(tries):
+        try:
+            return _gemini(parts, timeout=timeout)
+        except (httpx.TimeoutException, httpx.TransportError):
+            if i == tries - 1:
+                raise RuntimeError("the planning model timed out twice; try again in a minute")
+
+
+_FRAME_SCHEMA = """{"title": str, "summary": str (3-4 sentences), "highlights": [str], "weather_summary": str,
+ "attire": {"summary": str, "pack": [str]}, "transport": {"recommended": str, "notes": [str]},
+ "itineraries": [exactly 3: {"id": "A|B|C", "name": str (2-4 words), "style": str, "summary": str,
+                  "hotel": str (EXACT name from HOTELS, a different hotel for each), "hotel_why": str}]}"""
+
+_DAYS_SCHEMA = """{"est_total": str (whole trip for the travellers), "days": [ one per calendar day, start to end
+ inclusive: {"date": "YYYY-MM-DD", "title": str, "items": [{"time": "HH:MM", "end": "HH:MM",
+ "type": "breakfast|lunch|dinner|activity|event|transit|hotel|free|nightlife", "title": str,
+ "place": str (EXACT name from THIS itinerary's lists, or "" for transit/free), "detail": str (1-2 sentences),
+ "cost": str}]}]}"""
+
+
+def _compose_parallel(b: dict, rules: str, head: str, lists: dict) -> dict:
+    """New plans: one small call frames the trip (3 concepts + hotels), then the three hour-by-hour itineraries are
+    written IN PARALLEL, each from its own share of the restaurants/sights/bars/events. Splitting the pools makes
+    the options different by construction, and three short answers finish far sooner than one huge one."""
+    frame = _gem([{"text": f"{rules}\n\n{head}\nHOTELS: {json.dumps(lists['HOTELS'])}\n"
+                           f"SIGHTS (names only): {json.dumps([s.get('name') for s in lists['SIGHTS']])}\n"
+                           f"EVENTS: {json.dumps(lists['EVENTS'])}\n\nFrame the trip: overview plus three distinct "
+                           f"itinerary concepts (A classic, B leaning hardest into the themes, C slower / better value)."
+                           f"\nReturn JSON only:\n{_FRAME_SCHEMA}"}], timeout=180)
+    concepts = (frame or {}).get("itineraries") or []
+    if len(concepts) < 3:
+        raise RuntimeError("the planner returned no itinerary concepts")
+    keep = {_norm(m) for m in b.get("must_do") or []}
+    iconic = lists["SIGHTS"][:2]  # the two top-ranked sights may appear in every option
+
+    def share(xs: list, i: int, shared: list | None = None) -> list:
+        own = [x for k, x in enumerate(xs) if k % 3 == i or _norm(x.get("name", "")) in keep]
+        return (shared or []) + [x for x in own if x not in (shared or [])]
+    def one(i: int, c: dict) -> dict:
+        pools = {"RESTAURANTS": share(lists["RESTAURANTS"], i), "SIGHTS": share(lists["SIGHTS"][2:], i, iconic),
+                 "NIGHTLIFE": share(lists["NIGHTLIFE"], i), "EVENTS": share(lists["EVENTS"], i)}
+        txt = (f"{rules}\n\n{head}\nTHIS ITINERARY: {json.dumps(c)} (stay at its hotel the whole trip)\n"
+               + "\n".join(f"{k} (use ONLY these for this itinerary): {json.dumps(v)}" for k, v in pools.items())
+               + f"\n\nWrite itinerary {c.get('id')} hour by hour.\nReturn JSON only:\n{_DAYS_SCHEMA}")
+        return _gem([{"text": txt}], timeout=300) or {}
+    with ThreadPoolExecutor(3) as ex:
+        parts = list(ex.map(lambda ic: one(*ic), enumerate(concepts[:3])))
+    its = []
+    for c, p in zip(concepts[:3], parts):
+        if not p.get("days"):
+            raise RuntimeError(f"itinerary {c.get('id')} came back empty")
+        its.append({**c, "est_total": p.get("est_total", ""), "days": p["days"]})
+    return {**{k: frame.get(k) for k in ("title", "summary", "highlights", "weather_summary", "attire", "transport")},
+            "itineraries": its}
 
 
 def overlaps(plan: dict, must: list[str] | None = None) -> dict[str, list[str]]:
@@ -424,7 +562,7 @@ def _enrich(plan: dict, g: dict) -> None:
     for it in plan.get("itineraries") or []:
         h = idx.get(_norm(it.get("hotel", "")))
         it["hotel_info"] = {k: h.get(k) for k in ("name", "photo", "rating", "short_address", "maps_url",
-                                                   "est_nightly", "price")} if h else None
+                                                   "est_nightly", "price", "live")} if h else None
         for day in it.get("days") or []:
             for item in day.get("items") or []:
                 p = idx.get(_norm(item.get("place", "")))
@@ -445,7 +583,9 @@ def _assemble(tid: str, request: str, b: dict, g: dict, plan: dict, history: lis
                                                           "flights": r.get("flights") or [],
                                                           "getting_around": r.get("getting_around") or [],
                                                           "car_rentals": r.get("car_rentals") or [],
-                                                          "live_flights": g.get("live_flights")},
+                                                          "live_flights": g.get("live_flights"),
+                                                          "live_cars": g.get("live_cars")},
+        "hotels_live_at": g.get("hotels_live_at"),
         "hotels": g["hotels"], "sights": g["sights"], "dining": g["dining"], "nightlife": g["nightlife"],
         "events": r.get("events") or [], "tips": r.get("tips") or [], "itineraries": plan["itineraries"][:3],
         "chosen": chosen, "history": history, "_gathered": g,

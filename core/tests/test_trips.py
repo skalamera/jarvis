@@ -98,3 +98,18 @@ def test_overlaps_counts_cross_itinerary_repeats_only():
     o = trips.overlaps(plan)
     assert o == {"Husk": ["A", "B"], "Fort": ["A", "C"]}      # repeats within A and the shared hotel don't count
     assert trips.overlaps(plan, must=["Fort"]) == {"Husk": ["A", "B"]}
+
+
+def test_gather_end_to_end_with_stubbed_sources(tdir, monkeypatch):
+    """The whole research step runs (guards against wiring slips like a list popped twice)."""
+    monkeypatch.setattr(trips, "_places", lambda q, n=8: [{"name": f"{q[:12]} #{i}", "lat": 1.0, "lng": 2.0} for i in range(3)])
+    monkeypatch.setattr(trips, "_weather", lambda *a: None)
+    monkeypatch.setattr(trips, "_research", lambda *a, **k: {"events": [], "climate": {"summary": "mild"}})
+    monkeypatch.setattr(trips, "_live_flights", lambda b: None)
+    monkeypatch.setattr(trips, "_live_cars", lambda b: {"cars": [{"name": "Kia"}], "source": "octotrip"})
+    monkeypatch.setattr(trips, "_live_hotels", lambda b, h: {"count": 1, "hotels": [
+        {"name": "Live Inn", "hotel_id": "h9", "offer_id": "o9", "nightly": "$99.00", "price": "$198.00"}]})
+    b = {"destination": "Bayville", "budget": "moderate", "themes": [], "start_date": "2026-11-12", "end_date": "2026-11-14"}
+    g = trips._gather("gather001", b)
+    assert len(g["hotels"]) == 7 and g["hotels"][-1]["live"]["offer_id"] == "o9"   # 3 + 3 Places + 1 live-only
+    assert g["live_cars"]["cars"] and g["weather"]["source"] == "typical" and g["hotels_live_at"]

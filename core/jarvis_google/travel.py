@@ -366,6 +366,23 @@ def hotels_search(location: str, check_in: str, check_out: str, guests: int = 1,
                   radius_km: float = 5, free_cancellation_only: bool = False, max_results: int = 8) -> dict:
     w = _where(location)
     ci, co = _date(check_in), _date(check_out, 1)
+    from . import liteapi
+    if liteapi.configured():  # live, bookable rates (Duffel Stays isn't enabled on his account)
+        lr = liteapi.search(w["lat"], w["lng"], ci, co, adults=max(1, int(guests or 1)), rooms=max(1, int(rooms or 1)),
+                            radius_m=int(radius_km * 1000), near=w["name"])
+        hs = [h for h in lr["hotels"] if h["refundable"] or not free_cancellation_only]
+        for h in hs:
+            h["distance_km"] = _km(w, {"latitude": h.get("lat"), "longitude": h.get("lng")}) if h.get("lat") else None
+        top = hs[:max(1, min(int(max_results or 8), 12))]
+        out = {"kind": "hotels", "key": f"travel:hotels:{w['name']}-{ci}-{co}", "near": w["name"], "check_in": ci,
+               "check_out": co, "nights": lr.get("nights"), "guests": guests, "hotels": top, "count": len(hs),
+               "test_mode": lr.get("sandbox"), "provider": "liteapi"}
+        store.record_result("hotels_search", None, {"location": location, "check_in": ci}, out)
+        return {"near": w["name"], "nights": lr.get("nights"), "count": len(hs), "test_mode": out["test_mode"],
+                "best": [{"n": i + 1, "search_result_id": h["offer_id"], "name": h["name"], "nightly": h["nightly"],
+                          "total": h["price"], "review_score": h["review_score"], "stars": h["stars"],
+                          "refundable": h["refundable"], "distance_km": h["distance_km"]} for i, h in enumerate(top[:6])],
+                "shown": "hotels are on screen; recommend one in a sentence"}
     body = {"rooms": max(1, int(rooms or 1)), "guests": [{"type": "adult"} for _ in range(max(1, int(guests or 1)))],
             "check_in_date": ci, "check_out_date": co, "free_cancellation_only": bool(free_cancellation_only),
             "location": {"radius": radius_km, "geographic_coordinates": {"latitude": w["lat"], "longitude": w["lng"]}}}
@@ -411,6 +428,9 @@ def _km(a: dict, g: dict) -> float | None:
 
 
 def hotel_book(search_result_id: str, rate_id: str = "") -> dict:
+    from . import liteapi
+    if liteapi.configured():
+        return liteapi.propose_book(search_result_id)
     p = _need("given_name", "family_name", "email", "phone_number")
     sr = _duffel("POST", f"/stays/search_results/{search_result_id}/actions/fetch_all_rates", timeout=90)
     acc = sr.get("accommodation") or {}
@@ -462,9 +482,14 @@ def car_rentals_search(location: str, pickup_date: str, dropoff_date: str, picku
     age = int(driver_age or _age() or 30)
     spot = {"radius": 10, "geographic_coordinates": {"latitude": w["lat"], "longitude": w["lng"]}}
     pu, do = _date(pickup_date), _date(dropoff_date, 1)
-    res = _duffel("POST", "/cars/search", {"pickup_date": pu, "pickup_time": pickup_time, "pickup_location": spot,
+    try:
+        res = _duffel("POST", "/cars/search", {"pickup_date": pu, "pickup_time": pickup_time, "pickup_location": spot,
                                             "dropoff_date": do, "dropoff_time": dropoff_time, "dropoff_location": spot,
                                             "driver": {"residence_country_code": "US", "age": age}}, timeout=90)
+    except RuntimeError as e:
+        if "not enabled" not in str(e):
+            raise
+        return _cars_octotrip(location, loc, pu, do, pickup_time, dropoff_time, max_results)
     cars = []
     for r in res.get("rates") or []:
         c, sup, pl = r.get("car") or {}, r.get("supplier") or {}, r.get("pickup_location") or {}
@@ -485,6 +510,22 @@ def car_rentals_search(location: str, pickup_date: str, dropoff_date: str, picku
             "best": [{"n": i + 1, "rate_id": c["id"], "car": c["name"], "category": c["category"], "supplier": c["supplier"],
                       "total": c["price"]} for i, c in enumerate(top[:6])],
             "shown": "rental cars are on screen; recommend one in a sentence"}
+
+
+def _cars_octotrip(location: str, loc: str, pu: str, do: str, pt: str, dt_: str, max_results: int) -> dict:
+    """Duffel Cars isn't enabled on his account: live prices from OctoTrip; Book opens the provider's site in JARVIS."""
+    from . import cars_live
+    r = cars_live.search(loc or "New York LaGuardia Airport", pu, do, pt, dt_, max_results=max(1, min(int(max_results or 8), 12)))
+    days = max(1, (dt.date.fromisoformat(do) - dt.date.fromisoformat(pu)).days)
+    out = {"kind": "car_rentals", "key": f"travel:cars:{r.get('location')}-{pu}-{do}", "near": r.get("location"),
+           "pickup_date": pu, "dropoff_date": do, "days": days, "cars": r["cars"], "count": r["count"],
+           "test_mode": False, "provider": "octotrip", "message": r.get("message")}
+    store.record_result("car_rentals_search", None, {"location": location, "pickup_date": pu}, out)
+    return {"near": out["near"], "days": days, "count": r["count"], "provider": "octotrip",
+            "best": [{"n": i + 1, "car": c["name"], "category": c["category"], "supplier": c["supplier"], "total": c["price"],
+                      "free_cancellation": c["free_cancellation"]} for i, c in enumerate(r["cars"][:6])],
+            "shown": "rental cars are on screen with live prices. These book on the provider's site: he taps Book on "
+                     "the card (opens inside JARVIS). Never call car_rental_book for them."}
 
 
 def _age() -> int | None:
@@ -773,6 +814,11 @@ def reservations_list() -> dict:
     except RuntimeError as e:
         errors.append(str(e))
     items += _duffel_bookings()
+    try:
+        from . import liteapi
+        items += liteapi.bookings()
+    except RuntimeError as e:
+        errors.append(str(e))
     items.sort(key=lambda r: (r["day"] or "", r.get("time") or ""))
     res = {"kind": "reservations", "key": "travel:my-reservations", "items": items, "errors": errors}
     store.record_result("reservations_list", None, {}, res)
@@ -826,6 +872,19 @@ def reservation_cancel(reservation_id: str, provider: str = "resy") -> dict:
         return store.propose("reservation_cancel", "travel", {"provider": provider, "booking_id": rid, "quote_id": quote_id,
                                                               "name": b["name"]},
                              f"Cancel {b['name']}", preview)
+    if provider == "liteapi_hotel":
+        from . import liteapi
+        b = next((x for x in liteapi.bookings() if x["id"] == rid), None)
+        if not b:
+            raise ValueError("I can't find that hotel booking; call reservations_list.")
+        preview = {"type": "booking", "category": "cancel", "title": f"Cancel · {b['name']}",
+                   "lines": [["Booking", b["name"]], ["Check-in", b["day"]], ["Reference", str(b.get("reference") or "")]],
+                   "total": b.get("total") or "See policy", "total_label": "Paid",
+                   "policy": "Refund follows the rate's cancellation policy (non-refundable rates keep part or all).",
+                   "danger": "This cancels the hotel booking.", "test_mode": b.get("test_mode"),
+                   "action_label": "Cancel booking"}
+        return store.propose("reservation_cancel", "travel", {"provider": provider, "booking_id": rid, "name": b["name"]},
+                             f"Cancel {b['name']}", preview)
     raise ValueError(f"unknown provider {provider!r}")
 
 
@@ -841,6 +900,10 @@ def _exec_cancel(account: str, provider: str, name: str = "", token: str = "", r
         refund = (j.get("payment") or {}).get("transaction") or {}
         out = {"category": "cancel", "name": name, "reference": reservation_id,
                "refund": _money(refund.get("refund_amount")) if refund.get("refund_amount") else ""}
+    elif provider == "liteapi_hotel":
+        from . import liteapi
+        c = liteapi.cancel(booking_id)
+        out = {"category": "cancel", "name": name, "reference": booking_id, "refund": c.get("refund")}
     elif provider == "duffel_flight":
         c = _duffel("POST", f"/air/order_cancellations/{quote_id}/actions/confirm")
         out = {"category": "cancel", "name": name, "reference": booking_id,
@@ -864,3 +927,4 @@ def register_executors() -> None:
 
 
 register_executors()
+from . import liteapi as _liteapi  # noqa: E402,F401  (registers the LiteAPI hotel booking executor)

@@ -124,7 +124,10 @@ export function CarRentalsCard({ card }: { card: Card }) {
             <div className="tv-sub">{c.supplier} · {c.seats} seats · {c.transmission}{c.pickup ? ` · ${c.pickup}` : ""}</div>
           </div>
           <div className="tv-price"><b>{c.price}</b>
-            <button className="tv-book" onClick={(e) => { e.stopPropagation(); book("car_rental_book", { rate_id: c.id }); }}>Book</button></div>
+            {c.booking_url
+              ? <button className="tv-book" title="Opens the rental site inside JARVIS; you finish booking there" onClick={(e) => { e.stopPropagation(); core.launchCard({ kind: "webapp", title: `Rental · ${c.supplier || ""} ${c.name || ""}`, account: null, data: { url: c.booking_url, partition: "persist:cars" } }); }}>Book ↗</button>
+              : <button className="tv-book" onClick={(e) => { e.stopPropagation(); book("car_rental_book", { rate_id: c.id }); }}>Book</button>}
+            {c.free_cancellation && <span className="muted small">free cancellation</span>}</div>
         </motion.div>
       ))}
     </div>

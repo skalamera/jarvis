@@ -2813,3 +2813,6 @@ a.md-album.md-link { align-self: flex-start; width: fit-content; max-width: 100%
 .tp-fp { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; } .tp-fp b { color: #ffd58a; font-size: 13.5px; } .tp-fp small { color: var(--muted); font-size: 10.5px; }
 .tp-fp button { background: linear-gradient(135deg, var(--cy-hi), var(--cy)); color: #00131f; border: 0; border-radius: 6px; padding: 3px 10px; font: 700 11.5px var(--f-ui); cursor: pointer; }
 .tp-fp button:disabled { opacity: .35; cursor: default; }
+
+.tp-tb .tp-price.live { color: #ffd58a; } .tp-tb .tp-ok { color: var(--green); } .tp-tb .tp-warn { color: #ffb4a2; }
+.tp-use .tp-bookb { background: linear-gradient(135deg, var(--cy-hi), var(--cy)); color: #00131f; border: 0; font-weight: 700; }

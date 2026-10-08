@@ -156,7 +156,7 @@ function Itinerary({ d, i, cardId }: { d: any; i: number; cardId: string }) {
         <div className="tp-ithx">
           <div className="tp-itn"><span className="tp-badge">{it.id}</span>{it.name}{d.chosen === i && <span className="tp-chosen">✓ Chosen</span>}</div>
           <div className="tp-its">{it.summary}</div>
-          <div className="tp-ithl">🛏 <b>{it.hotel}</b>{h.rating ? ` · ★${h.rating}` : ""}{h.est_nightly ? ` · ${h.est_nightly}/night` : ""}
+          <div className="tp-ithl">🛏 <b>{it.hotel}</b>{h.rating ? ` · ★${h.rating}` : ""}{h.live ? <> · <span className="tp-livebadge">● LIVE</span> {h.live.nightly}/night</> : h.est_nightly ? ` · ${h.est_nightly}/night` : ""}
             <span> — {it.hotel_why}</span></div>
           <div className="tp-itt">Est. total <b>{it.est_total}</b></div>
         </div>
@@ -210,7 +210,7 @@ function LiveFares({ d, cardId }: { d: any; cardId: string }) {
     setBusy(true);
     const r = await core.rpc("trip_refresh_flights", { trip_id: d.id }, 120_000);
     setBusy(false);
-    if (r.ok) { core.patchCard(cardId, r.result, r.result.title); toast("Fares refreshed."); } else toast(r.error || "Couldn't refresh fares", true);
+    if (r.ok) { core.patchCard(cardId, r.result, r.result.title); toast("Live prices refreshed (flights, hotels, cars)."); } else toast(r.error || "Couldn't refresh prices", true);
   };
   return (
     <div className="tp-live" onClick={stop}>
@@ -233,6 +233,11 @@ function LiveFares({ d, cardId }: { d: any; cardId: string }) {
 
 function Overview({ d, cardId }: { d: any; cardId: string }) {
   const t = d.transport || {};
+  const mx = useContext(MaxCtx);
+  const openSite = (url: string, title: string) => {   // step out of the planner's expanded view so the site is on top
+    mx?.setMax(false);
+    window.setTimeout(() => core.launchCard({ kind: "webapp", title, account: null, data: { url, partition: "persist:cars" } }), 80);
+  };
   return (
     <div className="tp-ov">
       <div className="tp-sec"><h5>The trip</h5><p>{d.summary}</p><ul className="tp-hl">{(d.highlights || []).map((x: string) => <li key={x}>{x}</li>)}</ul></div>
@@ -246,7 +251,19 @@ function Overview({ d, cardId }: { d: any; cardId: string }) {
         {!t.live_flights && (t.flights || []).length > 0 && <table className="tp-tab"><thead><tr><th>Airline</th><th>Route</th><th>Time</th><th>Est. round trip</th></tr></thead>
           <tbody>{t.flights.map((f: any, k: number) => <tr key={k}><td>{f.airline}</td><td>{f.route}{f.nonstop ? " · nonstop" : ""}</td><td>{f.typical_duration}</td><td>{f.est_round_trip}</td></tr>)}</tbody></table>}
       </div>
-      {(t.car_rentals || []).length > 0 && <div className="tp-sec"><h5>Car rentals</h5>
+      {t.live_cars?.cars?.length > 0 && <div className="tp-sec"><h5>Car rentals</h5>
+        <div className="tp-liveh"><span className="tp-livebadge">● LIVE PRICES</span> {t.live_cars.location} · whole rental · book on the provider's site</div>
+        {t.live_cars.cars.map((c: any) => (
+          <div key={c.booking_url} className="tp-fare" onClick={stop}>
+            {c.photo ? <img src={c.photo} alt="" /> : <span className="tp-noimg sm">🚗</span>}
+            <div className="tp-fl"><b>{c.name} <span style={{ fontWeight: 400, color: "var(--muted)" }}>or similar · {c.category}</span></b>
+              <span>{c.supplier} · {c.seats} seats · {c.bags} bags · {c.transmission}</span>
+              <small>{[c.free_cancellation ? "free cancellation" : "", c.mileage ? `${c.mileage} miles` : "", c.deposit ? `$${c.deposit} deposit` : ""].filter(Boolean).join(" · ")}</small></div>
+            <div className="tp-fp"><b>{c.price}</b><small>${c.per_day}/day</small>
+              <button onClick={() => openSite(c.booking_url, `Rental · ${c.supplier} ${c.name}`)}>Book ↗</button></div>
+          </div>))}
+      </div>}
+      {!t.live_cars && (t.car_rentals || []).length > 0 && <div className="tp-sec"><h5>Car rentals</h5>
         <table className="tp-tab"><thead><tr><th>Company</th><th>Class</th><th>Est. per day</th><th>Pickup</th></tr></thead>
           <tbody>{t.car_rentals.map((c: any, k: number) => <tr key={k}><td>{c.company}</td><td>{c.category}</td><td>{c.est_daily}</td><td>{c.pickup}</td></tr>)}</tbody></table></div>}
       {(t.getting_around || []).length > 0 && <div className="tp-sec"><h5>Getting around</h5><ul>{t.getting_around.map((x: string) => <li key={x}>{x}</li>)}</ul></div>}
@@ -257,8 +274,10 @@ function Overview({ d, cardId }: { d: any; cardId: string }) {
 }
 
 function Hotels({ d, onRevise }: { d: any; onRevise: (t: string) => void }) {
+  const liveAge = d.hotels_live_at ? Math.round((Date.now() / 1000 - d.hotels_live_at) / 60) : null;
   const users = (name: string) => (d.itineraries || []).filter((it: any) => it.hotel === name).map((it: any) => it.id);
   return (
+    <>{liveAge != null && <div className="tp-liveh" style={{ marginTop: 8 }}><span className="tp-livebadge">● LIVE RATES</span> bookable via LiteAPI · checked {liveAge < 1 ? "just now" : `${liveAge} min ago`}{liveAge > 25 ? " (refresh in Overview before booking)" : ""}</div>}
     <div className="tp-tiles">
       {(d.hotels || []).map((h: any) => (
         <div key={h.id || h.name} className="tp-tile">
@@ -266,17 +285,20 @@ function Hotels({ d, onRevise }: { d: any; onRevise: (t: string) => void }) {
           <div className="tp-tb">
             <b>{h.name}</b>
             <span>{h.rating ? `★${h.rating}` : ""}{h.reviews_count ? ` (${h.reviews_count.toLocaleString()})` : ""}{h.price ? ` · ${h.price}` : ""}</span>
-            <span className="tp-price">{h.est_nightly ? `${h.est_nightly} / night (est.)` : "price on request"}</span>
+            {h.live ? <span className="tp-price live"><span className="tp-livebadge">● LIVE</span> {h.live.nightly}/night · {h.live.price} total</span>
+              : <span className="tp-price">{h.est_nightly ? `${h.est_nightly} / night (est.)` : "price on request"}</span>}
+            {h.live && <small className={h.live.refundable ? "tp-ok" : "tp-warn"}>{h.live.room ? `${h.live.room} · ` : ""}{h.live.policy}{h.live.due_at_hotel ? ` · ${h.live.due_at_hotel} due at hotel` : ""}</small>}
             <small>{h.area || h.short_address}</small>
             <div className="tp-use" onClick={stop}>
               {users(h.name).length ? <em>In {users(h.name).join(", ")}</em> : null}
+              {h.live?.offer_id && <button className="tp-bookb" onClick={() => core.sendText(`Book hotel offer ${h.live.offer_id} (${h.name}, ${h.live.price} for the ${d.title} trip)`)}>Book…</button>}
               {(d.itineraries || []).filter((it: any) => it.hotel !== h.name).map((it: any) => (
                 <button key={it.id} onClick={() => onRevise(`Switch itinerary ${it.id}'s hotel to ${h.name}`)}>Use for {it.id}</button>))}
             </div>
           </div>
         </div>
       ))}
-    </div>
+    </div></>
   );
 }
 
