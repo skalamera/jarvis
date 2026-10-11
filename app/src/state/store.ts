@@ -38,6 +38,8 @@ interface Store {
   dropActive: boolean;
   /** The preset showcase / narrated support tour while it runs (progress HUD). */
   showcase: { active: boolean; step: number; total: number; label: string; mode?: string } | null;
+  /** "Morning, Jarvis": the loading panel while today's data is gathered and the briefing is composed. */
+  morningScan: { items: { key: string; label: string; status?: "ok" | "err" }[]; stage: "gathering" | "composing" } | null;
   /** Sleep mode (dimmed HUD) and the moment the power-on sequence started (ms since epoch, 0 = not playing). */
   asleep: boolean;
   powerOnAt: number;
@@ -98,6 +100,7 @@ export const useStore = create<Store>((set, get) => ({
   uploading: 0,
   dropActive: false,
   showcase: null,
+  morningScan: null,
   asleep: false,
   powerOnAt: 0,
   set: (p) => set(p),

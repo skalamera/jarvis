@@ -8,6 +8,7 @@ Secrets/config (never in the repo): DUFFEL_ACCESS_TOKEN and RESY_AUTH_TOKEN in e
 profile (legal name, date of birth, phone, email) lives in STATE_DIR/traveler.json, written only from what he states.
 """
 from __future__ import annotations
+from jarvis_core.compat import wf
 
 import datetime as dt
 import json
@@ -356,7 +357,7 @@ def _exec_flight(account: str, offer_id: str, passenger_id: str, amount: str, cu
 def _fmt_dt(iso: str) -> str:
     try:
         d = dt.datetime.fromisoformat(iso)
-        return d.strftime("%a %b %-d, %-I:%M %p")
+        return d.strftime(wf("%a %b %-d, %-I:%M %p"))
     except Exception:
         return iso or ""
 
@@ -586,7 +587,7 @@ def _slots_near(slots: list[dict], want: str) -> list[dict]:
             continue
         seen.add(t)
         h, m = map(int, t.split(":"))
-        out.append({"time": t, "label": dt.time(h, m).strftime("%-I:%M %p"), "type": typ,
+        out.append({"time": t, "label": dt.time(h, m).strftime(wf("%-I:%M %p")), "type": typ,
                     "token": (s.get("config") or {}).get("token"), "off": abs((h * 60 + m) - (wh * 60 + wm))})
     out.sort(key=lambda x: (x["off"], x["time"]))
     return out
@@ -664,7 +665,7 @@ def restaurant_book(venue_id: int, date: str, time: str, party_size: int = 2, se
     pay = (det.get("payment") or {}).get("amounts") or {}
     venue = v.get("venue") or {}
     name = venue.get("name") or "the restaurant"
-    lines = [["When", f"{dt.date.fromisoformat(day).strftime('%a %b %-d')} · {s['label']}"],
+    lines = [["When", f"{dt.date.fromisoformat(day).strftime(wf('%a %b %-d'))} · {s['label']}"],
              ["Party", f"{party} {'person' if party == 1 else 'people'}"], ["Seating", s["type"]]]
     if s["off"]:
         lines.append(["Note", f"Closest open time to {time} ({s['off']} min off)"])
@@ -760,7 +761,7 @@ def _resy_reservations(upcoming_only: bool = True) -> list[dict]:
         out.append({
             "provider": "resy", "id": str(x.get("reservation_id")), "token": x.get("resy_token"),
             "name": v.get("name") or "Restaurant", "day": x.get("day"), "time": t,
-            "time_label": dt.time(hh, mm).strftime("%-I:%M %p"), "party_size": x.get("num_seats"),
+            "time_label": dt.time(hh, mm).strftime(wf("%-I:%M %p")), "party_size": x.get("num_seats"),
             "photo": (v.get("images") or [None])[0], "neighborhood": loc.get("neighborhood"),
             "address": ", ".join(y for y in (loc.get("address_1"), loc.get("locality")) if y),
             "cancel_allowed": canc.get("allowed", True) is not False,
@@ -838,7 +839,7 @@ def reservation_cancel(reservation_id: str, provider: str = "resy") -> dict:
             raise ValueError("I can't find that Resy reservation among his upcoming ones; call reservations_list.")
         if not r["cancel_allowed"]:
             raise RuntimeError(f"Resy no longer allows cancelling {r['name']} online; he'd need to call the restaurant.")
-        lines = [["When", f"{dt.date.fromisoformat(r['day']).strftime('%a %b %-d')} · {r['time_label']}"],
+        lines = [["When", f"{dt.date.fromisoformat(r['day']).strftime(wf('%a %b %-d'))} · {r['time_label']}"],
                  ["Party", f"{r['party_size']} people"]]
         if r["address"]:
             lines.append(["Where", r["address"]])

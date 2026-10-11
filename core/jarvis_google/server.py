@@ -323,13 +323,14 @@ def music_play(query: str, kind: str = "") -> str:
 
 
 @mcp.tool()
-def youtube_video(query: str = "", video_id: str = "") -> str:
+def youtube_video(query: str = "", video_id: str = "", recent: str = "") -> str:
     """Play a regular YouTube video in the HUD's video player (starts playing). query = what to watch ("how to
     make sourdough", "SpaceX launch", "Veritasium latest") or a YouTube URL; video_id = an 11-char id from an
-    earlier result. Renders a video card with the player and the other search results to pick from."""
+    earlier result. recent = "day" | "week" | "month" to only search videos uploaded in that window (use for news,
+    markets, sports, anything topical). Renders a video card with the player and the other search results."""
     from . import media as MD
     try:
-        return json.dumps(MD.brief("youtube_video", MD.youtube_video(query, video_id)), default=str)
+        return json.dumps(MD.brief("youtube_video", MD.youtube_video(query, video_id, recent=recent)), default=str)
     except Exception as e:
         return json.dumps({"error": f"{type(e).__name__}: {e}"})
 
@@ -385,6 +386,21 @@ def support_model(section: str = "", tour: bool = False) -> str:
     from . import support as SU
     try:
         return json.dumps(SU.support_model(section, tour), default=str)
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
+# ------------------------------------------------------------------ X (formerly Twitter)
+@mcp.tool()
+def x_open(view: str = "home", query: str = "", latest: bool = True, user: str = "") -> str:
+    """Open the X (formerly Twitter) display: the real x.com, signed in as Stephen, in the HUD. view = "home"
+    (his timeline), "trending", "news", "notifications", "messages", "bookmarks"; or query = a search ("bitcoin",
+    "Bears Packers", "from:elonmusk starship"; latest=true shows newest posts first, false = top posts); or
+    user = a handle to open their profile ("elonmusk"). This only OPENS the page: you can't read the posts
+    yourself, so say what you've put on screen and don't summarize posts you haven't seen."""
+    from . import xsocial as XS
+    try:
+        return json.dumps(XS.x_open(view, query, latest, user), default=str)
     except Exception as e:
         return json.dumps({"error": f"{type(e).__name__}: {e}"})
 

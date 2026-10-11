@@ -12,6 +12,7 @@ The composer may only place hotels/sights/restaurants/events from those lists in
 Trips persist in STATE_DIR/trips/<id>.json with every version kept, so a revision can always be undone.
 """
 from __future__ import annotations
+from jarvis_core.compat import wf
 
 import datetime as dt
 import html
@@ -720,14 +721,14 @@ def trip_undo(trip_id: str) -> dict:
 
 def _hm(s: str | None) -> str:
     try:
-        return dt.datetime.fromisoformat(s or "").strftime("%a %-I:%M %p")
+        return dt.datetime.fromisoformat(s or "").strftime(wf("%a %-I:%M %p"))
     except ValueError:
         return s or ""
 
 
 def _day(s: str) -> str:
     try:
-        return dt.date.fromisoformat(s).strftime("%A, %B %-d")
+        return dt.date.fromisoformat(s).strftime(wf("%A, %B %-d"))
     except ValueError:
         return s
 

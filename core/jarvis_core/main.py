@@ -28,10 +28,13 @@ from .audio import MicPipeline, WakeWord
 from .briefing import briefing
 from .config import settings
 from .hermes_client import HermesClient
+from .morning import heard_hello
 from .session import Session, classify_confirmation, classify_forge
 from .voice import Voice, pcm16_to_wav
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+for _noisy in ("httpx", "httpcore"):  # one INFO line per HTTP request drowns the log
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 log = logging.getLogger("jarvis.core")
 
 STATE: dict = {}
@@ -46,7 +49,7 @@ async def lifespan(app: FastAPI):
     await STATE["voice"].resolve()  # before accepting clients, so the very first sentence uses the right voice
     STATE["wake"] = await asyncio.to_thread(WakeWord, settings.wake_threshold)
     asyncio.create_task(STATE["voice"].warm())
-    asyncio.create_task(asyncio.to_thread(kalshi._all_events))  # warm the Kalshi catalog (~10s) off the hot path
+    # Kalshi catalog is not pre-warmed: it loads on first use of the Kalshi display (kalshi._all_events).
     briefing.start()
     kalshi_auto.start()  # BTC 15-min autopilot thread (idle unless he turned it on)
     log.info("JARVIS core up. hermes=%s voice=%s wake=%s", settings.hermes_url, settings.voice_url,
@@ -219,6 +222,11 @@ async def ws_endpoint(ws: WebSocket):
             if kind == "morning":
                 await session.power_on()
                 return
+            if kind == "hello":  # "Morning, Jarvis": a plain wake, then the unscripted briefing
+                await session.wake_up()
+                await send({"type": "transcript", "text": heard, "via": "wake"})
+                await session.user_input("Morning, Jarvis", source="voice")
+                return
             if kind != "wake" and via != "sleep_wake":
                 return
             await session.wake_up()
@@ -249,6 +257,17 @@ async def ws_endpoint(ws: WebSocket):
         else:
             await session.state("idle")
 
+    async def on_wake_context(pcm: bytes) -> None:
+        """The wake word fired but nothing followed: was the phrase around it "Morning, Jarvis"?"""
+        try:
+            heard = await session.voice.stt(pcm16_to_wav(pcm))
+        except Exception:
+            return
+        if heard_hello(heard):
+            log.info("wake context: %r -> morning briefing", heard[:60])
+            await send({"type": "transcript", "text": heard, "via": "wake"})
+            await session.user_input("Morning, Jarvis", source="voice")
+
     async def on_mic_event(ev: dict) -> None:
         if ev["type"] == "wake" and session.sleeping:  # "Hey Jarvis" wakes it the usual way (no cinematic)
             await session.wake_up()
@@ -265,6 +284,10 @@ async def ws_endpoint(ws: WebSocket):
                 session.answer_timed_out()
             else:
                 await session.state("idle")
+                if ev.get("wake_ctx"):
+                    asyncio.create_task(on_wake_context(ev["wake_ctx"]))
+                elif ev.get("via") == "follow_up" or session.morning.active:
+                    asyncio.create_task(session.morning_silence())
         await send(ev)
 
     mic = MicPipeline(on_mic_event, on_utterance, STATE["wake"])
@@ -350,7 +373,8 @@ async def ws_endpoint(ws: WebSocket):
                             # A confirm card is waiting: listen longer for his spoken "confirm" / "cancel".
                             awaiting = session._state == "confirm" and bool(store.pending_actions() or session.approvals)
                             if (session._state == "idle" or awaiting) and not session._busy() and mic.mode == "wake":
-                                await mic.listen_follow_up(CONFIRM_LISTEN_S if awaiting else settings.follow_up_s)
+                                asked = session.morning.active and session.expects_answer()
+                                await mic.listen_follow_up(CONFIRM_LISTEN_S if (awaiting or asked) else settings.follow_up_s)
                         except asyncio.CancelledError:
                             pass
                     follow_up_task = asyncio.create_task(start_follow_up())
@@ -538,7 +562,7 @@ async def ws_endpoint(ws: WebSocket):
         await session.close()
 
 
-_MORNING = re.compile(r"\b(?:good\s+)?morning[\s,.!]*(?:jarvis|jarvas|jervis|travis|service)\b|\b(?:jarvis|jervis)[\s,.!]+(?:good\s+)?morning\b", re.I)
+_MORNING = re.compile(r"\bwake[\s,-]*up\b[\s,.!]*(?:jarvis[\s,.!]*)?(?:daddy|daddie|dad)(?:'?s|\s+is|ies)?[\s,.!]*home\b", re.I)  # "Wake up, Daddy's home"
 _HEY = re.compile(r"\b(?:hey|hi|okay|ok)[\s,.!]*(?:jarvis|jervis|jarvas)\b", re.I)
 
 
@@ -557,6 +581,8 @@ def sleep_word(text: str) -> str | None:
     t = text or ""
     if _MORNING.search(t):
         return "morning"
+    if heard_hello(t):
+        return "hello"
     if _HEY.search(t):
         return "wake"
     return None

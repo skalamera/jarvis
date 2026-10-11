@@ -19,8 +19,12 @@ function bakedRoot(): string {
 const PROJECT_ROOT =
   process.env.JARVIS_ROOT || (app.isPackaged && bakedRoot()) || path.resolve(__dirname, "..", "..");
 const CORE_DIR = path.join(PROJECT_ROOT, "core");
-const CORE_PY = path.join(CORE_DIR, ".venv", "bin", "python");
-const LOG_DIR = path.join(app.getPath("home"), "Library", "Logs", "Jarvis");
+const CORE_PY = process.platform === "win32"
+  ? path.join(CORE_DIR, ".venv", "Scripts", "python.exe")
+  : path.join(CORE_DIR, ".venv", "bin", "python");
+const LOG_DIR = process.platform === "darwin"
+  ? path.join(app.getPath("home"), "Library", "Logs", "Jarvis")
+  : path.join(app.getPath("logs"), "Jarvis");
 const TOKEN = process.env.JARVIS_TOKEN || randomBytes(24).toString("hex");
 
 let win: BrowserWindow | null = null;
@@ -66,6 +70,7 @@ async function startCore(): Promise<void> {
     cwd: CORE_DIR,
     env: { ...process.env, JARVIS_TOKEN: TOKEN, JARVIS_PORT: String(CORE_PORT), PYTHONUNBUFFERED: "1" },
     stdio: ["ignore", out, out],
+    windowsHide: true, // no console window on Windows (output goes to core.log)
   });
   log("core spawned pid", core.pid);
   core.on("exit", (code, sig) => {
@@ -203,6 +208,9 @@ app.whenReady().then(async () => {
   // The profile persists, so later sign-ins are one click and usually instant.
   ipcMain.handle("jarvis:ytmLogin", () => new Promise<string | null>((resolve) => {
     const chrome = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      path.join(process.env.PROGRAMFILES || "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(process.env["PROGRAMFILES(X86)"] || "C:\\Program Files (x86)", "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "Application", "chrome.exe"),
       path.join(app.getPath("home"), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome")].find((p) => fs.existsSync(p));
     if (!chrome) { dialog.showErrorBox("Google Chrome needed", "Signing in to YouTube Music needs Google Chrome installed."); resolve(null); return; }
     const profile = path.join(app.getPath("home"), ".hermes", "jarvis", "state", "ytmusic-chrome");
@@ -224,12 +232,29 @@ app.whenReady().then(async () => {
       ws.onmessage = (ev) => { const m = JSON.parse(String(ev.data)); if (m.id === 1) { clearTimeout(t); ws.close(); res(m.result?.cookies || []); } };
       ws.onerror = () => { clearTimeout(t); rej(new Error("cdp error")); };
     });
-    const finish = (v: string | null) => { if (done) return; done = true; clearInterval(timer); try { proc.kill(); } catch {} resolve(v); };
-    proc.on("exit", () => setTimeout(() => finish(null), 300));
+    // Close the sign-in Chrome via DevTools (on Windows the spawned chrome.exe is only a launcher that exits at once,
+    // so proc.kill() would miss the real browser process).
+    const closeChrome = async () => {
+      try {
+        const ver = await getJson("/json/version");
+        await new Promise<void>((res) => { const ws = new WebSocket(ver.webSocketDebuggerUrl);
+          const t = setTimeout(() => { try { ws.close(); } catch {} res(); }, 2000);
+          ws.onopen = () => { ws.send(JSON.stringify({ id: 1, method: "Browser.close" })); setTimeout(() => { clearTimeout(t); res(); }, 300); };
+          ws.onerror = () => { clearTimeout(t); res(); }; });
+      } catch { /* already gone */ }
+      try { proc.kill(); } catch {}
+    };
+    const finish = (v: string | null) => { if (done) return; done = true; clearInterval(timer); void closeChrome(); resolve(v); };
+    // macOS: the spawned process IS the browser, so its exit means he closed Chrome. Windows: the launcher exits
+    // within ~100 ms, so instead treat "DevTools port stopped answering after it was up" as Chrome being closed.
+    if (process.platform !== "win32") proc.on("exit", () => setTimeout(() => finish(null), 300));
+    let seenUp = false, misses = 0;
     const timer = setInterval(async () => {
       if (Date.now() - started > 10 * 60_000) return finish(null);
       try {
-        const tabs: any[] = await getJson("/json/list");
+        let tabs: any[];
+        try { tabs = await getJson("/json/list"); seenUp = true; misses = 0; }
+        catch (e) { if (seenUp && ++misses >= 3) return finish(null); if (!seenUp && Date.now() - started > 60_000) return finish(null); return; }
         if (!tabs.some((t) => t.type === "page" && String(t.url).startsWith("https://music.youtube.com"))) return;
         const ver = await getJson("/json/version");
         const all = await cookiesVia(ver.webSocketDebuggerUrl);

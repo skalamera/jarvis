@@ -5,6 +5,7 @@ game card; if several games match (e.g. "NFL scores" on a Sunday) it returns a s
 game there opens the full card through ``game_open``. Read-only; results are cached briefly (live games 30 s).
 """
 from __future__ import annotations
+from jarvis_core.compat import wf
 
 import datetime as dt
 import difflib
@@ -491,7 +492,7 @@ def sports_game(league: str = "", team: str = "", date: str = "", when: str = ""
                 break
         if not best:
             t = cands[0]
-            on = f" on {day:%A %B %-d}" if day else ""
+            on = f" on {day.strftime(wf('%A %B %-d'))}" if day else ""
             return {"error": f"No {LEAGUES[t['league']][1]} game found for the {t['name']}{on}."}
         result = game_summary(best[0]["league"], best[1]["event_id"])
     else:
@@ -500,7 +501,7 @@ def sports_game(league: str = "", team: str = "", date: str = "", when: str = ""
         sb = scoreboard(lg, day)
         games = sb["games"]
         if not games:
-            on = f" on {day:%A %B %-d}" if day else " right now"
+            on = f" on {day.strftime(wf('%A %B %-d'))}" if day else " right now"
             return {"error": f"No {LEAGUES[lg][1]} games{on}."}
         if len(games) == 1:
             result = game_summary(lg, games[0]["event_id"])

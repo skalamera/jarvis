@@ -5,6 +5,7 @@ resolved server-side (skipHttpRedirect) into short-lived googleusercontent links
 the HUD. Popular times is not in the API. Results are cached for 10 min to avoid paying twice for the same card.
 """
 from __future__ import annotations
+from jarvis_core.compat import wf
 
 import datetime as dt
 import os
@@ -105,7 +106,7 @@ def _fmt_t(iso: str | None) -> str:
         return ""
     t = dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone()
     now = dt.datetime.now().astimezone()
-    hm = t.strftime("%-I:%M %p").replace(":00 ", " ")
+    hm = t.strftime(wf("%-I:%M %p")).replace(":00 ", " ")
     if t.date() == now.date():
         return hm
     if t.date() == (now + dt.timedelta(days=1)).date():

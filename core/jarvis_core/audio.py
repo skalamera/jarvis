@@ -19,7 +19,7 @@ import numpy as np
 log = logging.getLogger("jarvis.audio")
 RATE = 16000
 FRAME = 1280  # 80 ms, what openWakeWord expects
-PHRASE_MIN_S, PHRASE_MAX_S = 0.5, 3.2  # sleep-word phrases ("Morning, Jarvis") are short
+PHRASE_MIN_S, PHRASE_MAX_S = 0.5, 4.0  # sleep-word phrases ("Wake up, Daddy's home") are short
 
 
 class WakeWord:
@@ -81,6 +81,8 @@ class MicPipeline:
         self.mode = "off"
         self.buf = np.zeros(0, dtype=np.int16)
         self.pre = deque(maxlen=6)  # ~0.5s of audio before speech starts
+        self.hist = deque(maxlen=32)  # ~2.5s: the phrase around the wake word ("Morning, Jarvis")
+        self._wake_ctx: list = []
         self.rec: list[np.ndarray] = []
         self.rec_started = 0.0
         self._rec_frames = 0
@@ -191,6 +193,7 @@ class MicPipeline:
             return
         if self.mode == "wake":
             self.pre.append(frame)
+            self.hist.append(frame)
             if self.suspended or now < self._cooldown_until:
                 self.wake.score(frame)  # keep model state warm
                 return
@@ -230,6 +233,7 @@ class MicPipeline:
         self._via = "wake"
         self._max_initial_silence = 6.0
         self._begin("capture")
+        self._wake_ctx = list(self.hist)
         self.rec = []  # drop the wake phrase itself
         await self.on_event({"type": "wake", "score": round(score, 3)})
         await self.on_event({"type": "listening", "via": "wake"})
@@ -242,8 +246,12 @@ class MicPipeline:
         self._cooldown_until = time.monotonic() + 1.0
         self._via = "wake"
         self._max_initial_silence = 6.0
+        ctx, self._wake_ctx = self._wake_ctx, []
         if not frames or not heard:
-            await self.on_event({"type": "listening_end", "via": via, "empty": True})
+            ev = {"type": "listening_end", "via": via, "empty": True}
+            if via == "wake" and len(ctx) >= 8:
+                ev["wake_ctx"] = np.concatenate(ctx).tobytes()
+            await self.on_event(ev)
             return
         pcm = np.concatenate(frames).tobytes()
         if len(pcm) < RATE * 2 * 0.3:

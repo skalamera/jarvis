@@ -123,19 +123,50 @@ def _evt(e: dict, n: int = 6) -> dict:
 _ev_lock = __import__("threading").Lock()
 
 
+# Only the fields the catalog views (_evt/_mkt/search) read. Rules text etc. is dropped: the market / event views
+# fetch those fresh. Keeps the cached catalog a fraction of the raw API payload in memory.
+_EV_KEYS = ("event_ticker", "series_ticker", "title", "sub_title", "category", "mutually_exclusive")
+_MK_KEYS = ("ticker", "event_ticker", "title", "yes_sub_title", "no_sub_title", "yes_bid_dollars", "yes_ask_dollars",
+            "no_bid_dollars", "no_ask_dollars", "last_price_dollars", "previous_price_dollars", "volume_fp",
+            "volume_24h_fp", "open_interest_fp", "status", "result", "close_time")
+_EV_IDLE = 20 * 60  # drop the catalog after 20 min without a Kalshi view
+_ev_used = [0.0]
+
+
+def _slim(e: dict) -> dict:
+    s = {k: e[k] for k in _EV_KEYS if k in e}
+    s["markets"] = [{k: m[k] for k in _MK_KEYS if k in m} for m in e.get("markets") or []]
+    return s
+
+
 def _fetch_events(pages: int = 80) -> list[dict]:
     evs, cur = [], ""
     for _ in range(pages):
         r = _get("/events", {"status": "open", "with_nested_markets": "true", "limit": 200, "cursor": cur})
-        evs += r.get("events") or []
+        evs += [_slim(e) for e in r.get("events") or []]
         cur = r.get("cursor") or ""
         if not cur:
             break
     return evs
 
 
+def _janitor() -> None:
+    while True:
+        time.sleep(60)
+        if _cache.get("events") and time.time() - _ev_used[0] > _EV_IDLE:
+            _cache.pop("events", None)
+
+
+_janitor_started = [False]
+
+
 def _all_events() -> list[dict]:
-    """Whole open catalog (~10-16k events, ~10s). Cached; served stale while a background refresh runs."""
+    """Whole open catalog (~10-16k events, ~10s), fetched only when a Kalshi view needs it. Cached 5 min (served
+    stale while a background refresh runs) and dropped after 20 idle minutes."""
+    _ev_used[0] = time.time()
+    if not _janitor_started[0]:
+        _janitor_started[0] = True
+        __import__("threading").Thread(target=_janitor, daemon=True).start()
     hit = _cache.get("events")
     if hit and time.time() - hit[0] < 300:
         return hit[1]

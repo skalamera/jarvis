@@ -7,12 +7,14 @@ and played as its display lands. It runs as the session's turn task, so Esc or a
 other turn.
 """
 from __future__ import annotations
+from .compat import wf
 
 import asyncio
 import datetime as dt
 import io
 import json
 import logging
+import os
 import re
 import time
 import wave
@@ -48,8 +50,10 @@ _SPECIFIC = re.compile(r"\b(jamie|hadrian|tier ?(?:1|2|3|one|two|three)\b(?![- ]
                        r"loop guard|takeover|sybill|budget|payload|on hold|webhook|linear)\b", re.I)
 
 
-POWER_ON_S = 4.0  # length of the HUD's power-on sequence; the briefing gathers its data meanwhile
-_MORNING_RE = re.compile(r"^\W*(?:good\s+)?morning[\s,.!]*jarvis\W*$|^\W*jarvis[\s,.!]+(?:good\s+)?morning\W*$", re.I)
+POWER_ON_S = 8.0  # length of the HUD's cinematic power-on sequence; the briefing gathers its data meanwhile
+# The power-on phrase "Wake up, Daddy's home" (and the ways Whisper writes it: "daddy is", "dad's", "daddies").
+WAKE_PHRASE = "Wake up, Daddy's home"
+_MORNING_RE = re.compile(r"\bwake[\s,-]*up\b[\s,.!]*(?:jarvis[\s,.!]*)?(?:daddy|daddie|dad)(?:'?s|\s+is|ies)?[\s,.!]*home\b", re.I)
 _SLEEP_RE = re.compile(r"^\W*(?:(?:ok|okay|alright|right|thanks)[\s,]+)?(?:jarvis[\s,]+)?(?:go to sleep|goodnight|good night|"
                        r"sleep mode|power down|that'?s all for (?:now|tonight))(?:[\s,.!]+jarvis)?\W*$", re.I)
 
@@ -126,7 +130,7 @@ def _co(name: str) -> str:
 def _clock(iso: str) -> str:
     try:
         d = dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(_tz())
-        return d.strftime("%-I:%M %p").replace(":00 ", " ")
+        return d.strftime(wf("%-I:%M %p")).replace(":00 ", " ")
     except Exception:
         return ""
 
@@ -548,22 +552,95 @@ def _video() -> Beat | None:
     cards = _cards(items)
     if not cards:
         return None
-    return Beat("VIDEO", "In that case, may I recommend the latest Starship flight? Rockets landing on chopsticks. "
-                         "Never gets old. I've queued it up for later.",
+    return Beat("VIDEO", "Which leaves time for the important things. May I recommend the latest Starship flight? "
+                         "Rockets landing on chopsticks. Never gets old. I've queued it up for later.",
                 cards, after_s=7.0, ui=[{"op": "after", "card": V.card("media_control", "", {"action": "pause"})}])
 
 
 def _music() -> Beat | None:
     from jarvis_google import media as MD
-    r, items = _grab(MD.music_play, "Come and Get Your Love Re-Recorded Guardians of the Galaxy Redbone", "song")
+    r, items = _grab(MD.music_play, "December, 1963 (Oh, What a Night) The Four Seasons", "song")
     cards = _cards(items)
     if not cards:
         return None
     return Beat("MUSIC", "And something to start the day with.", cards, after_s=0.2)
 
 
-BRIEFING = [_weather, _commute, _calendar, _email, _mag7, _btc]
-CLOSING = [_video, _music]  # after he answers the meeting-prep question
+GRANDMA_ADDRESS = os.environ.get("JARVIS_GRANDMA_ADDRESS", "100 Oxford Road, Lansdale, PA")
+
+
+def _grandma() -> Beat | None:
+    """Today's visit to his grandmother, with live traffic for the drive."""
+    from jarvis_google import routes as RT
+    r, items = _grab(RT.directions, GRANDMA_ADDRESS, "", "driving")
+    rt = (r.get("routes") or [{}])[0] if isinstance(r, dict) else {}
+    if not rt.get("duration"):
+        return Beat("GRANDMA", "You're also due to visit your grandmother in Lansdale today. I couldn't get live traffic "
+                               "for the drive, so I'd allow a little extra time.", _cards(items))
+    line = (f"You're also due to visit your grandmother in Lansdale today. The drive is about {_units(rt['duration'])}"
+            + (f", {_units(rt['distance'])}" if rt.get("distance") else "")
+            + (f", by way of {re.sub(r'\b(I|US|NJ|PA|NY)-(\d+)', r'\1 \2', rt['summary'])}" if rt.get("summary") else "")
+            + ".")
+    traffic, delay = (rt.get("traffic") or "").lower(), int(rt.get("delay_min") or 0)
+    if delay >= 5:
+        line += f" Traffic is {traffic or 'building'}, adding about {delay} minutes, so I'd leave a little early."
+    elif traffic:
+        line += f" Traffic is {traffic} right now."
+    return Beat("GRANDMA", line, _cards(items))
+
+
+def _inbox_clear() -> Beat | None:
+    return Beat("EMAIL", "And nothing in your inbox requires your immediate attention.", [])
+
+
+# The "Wake up, Daddy's home" routine: welcome + date question first (see run), then these in order.
+BRIEFING = [_weather, _mag7, _btc, _grandma, _inbox_clear, _video, _music]
+CLOSING: list = []  # nothing after the briefing (the meeting-prep question is skipped)
+ASK_DATE = "Welcome home, sir. How did your date go last night?"
+ASK_DATE_LISTEN_S = 8.0
+QUIP_PAUSE_S = 1.8  # beat of silence after the date quip
+_DATE_MEH = re.compile(r"\b(?:okay|ok|alright|all right|fine|not bad|so-so|meh|decent|could have been worse)\b", re.I)
+_DATE_BAD = re.compile(r"\b(?:bad|terrible|awful|horrible|disaster|rough|not great|not good|boring|worst)\b", re.I)
+_DATE_GOOD = re.compile(r"\b(?:great|amazing|awesome|fantastic|wonderful|good|perfect|incredible|loved it|fun)\b", re.I)
+DATE_QUIPS = {
+    "meh": [
+        "Okay. High praise indeed, sir. Shall I start drafting the wedding toast, or merely cancel the florist?",
+        "Just okay? I'll file it somewhere between catastrophe and she's the one. Statistically, that's where most "
+        "of them land.",
+        "Okay. In my experience, sir, that's the word people use when the restaurant was better than the company.",
+    ],
+    "good": [
+        "Splendid, sir. I'll act surprised when your Friday nights suddenly stop being available.",
+        "Excellent. I'd keep that to yourself at your grandmother's today, unless you fancy a two-hour interrogation.",
+    ],
+    "bad": [
+        "My condolences, sir. On the bright side, the markets are considerably more predictable.",
+        "Ah. Well, there's always the Mercedes. It has never once asked where this is going.",
+    ],
+    "none": ["I'll take the strategic silence as a no comment, sir. Very diplomatic."],
+    "other": ["Noted, sir. I'll update the file accordingly."],
+}
+
+
+def date_kind(text: str) -> str:
+    """His answer about the date: 'meh' (it was okay), 'bad', 'good', 'none' (silence) or 'other'."""
+    t = (text or "").strip()
+    if not t:
+        return "none"
+    if _DATE_MEH.search(t):
+        return "meh"
+    if _DATE_BAD.search(t):
+        return "bad"
+    if _DATE_GOOD.search(t):
+        return "good"
+    return "other"
+
+
+def date_quip(text: str) -> str:
+    pool = DATE_QUIPS[date_kind(text)]
+    return pool[dt.date.today().toordinal() % len(pool)]
+
+
 ASK_PREP = "Would you like to prepare for any of your upcoming meetings?"
 ASK_PREP_LISTEN_S = 8.0
 
@@ -655,8 +732,10 @@ async def run(session: "Session", intro_delay: float = 0.0) -> None:
     if intro_delay:
         await asyncio.sleep(intro_delay)
     try:
-        greeting = f"Good {part}, sir."
-        await narr.play(greeting, await _synth(session, greeting))
+        await session.send({"type": "showcase", "active": True, "step": 0, "total": len(builders), "label": "WELCOME HOME"})
+        answer = await _ask(session, narr, ASK_DATE, ASK_DATE_LISTEN_S)
+        quip = date_quip(answer)
+        quip_audio = await _synth(session, quip)
         beats: list[Beat] = []
         for t in prep:
             try:
@@ -677,7 +756,9 @@ async def run(session: "Session", intro_delay: float = 0.0) -> None:
         loop = asyncio.get_running_loop()
         for b in beats:
             b.audio = loop.create_future()
-        synth = asyncio.create_task(synth_all())
+        synth = asyncio.create_task(synth_all())  # the first beats synthesize while the quip plays
+        await narr.play(quip, quip_audio)
+        await asyncio.sleep(QUIP_PAUSE_S)  # let the joke land before the markets
         try:
             for i, b in enumerate(beats, 1):
                 await session.send({"type": "showcase", "active": True, "step": i, "total": len(beats), "label": b.label})
@@ -696,18 +777,30 @@ async def run(session: "Session", intro_delay: float = 0.0) -> None:
                         await session.send({"type": "card", "turn_id": turn_id, "card": op["card"]})
         finally:
             synth.cancel()
-        closing = [asyncio.create_task(asyncio.to_thread(b)) for b in CLOSING]  # fetch while we ask
-        if not await _ask_prep(session, narr):
-            for t in closing:
-                t.cancel()
-            return
-        await _play_beats(session, narr, turn_id, closing, offset=len(beats))
+        if CLOSING:
+            closing = [asyncio.create_task(asyncio.to_thread(b)) for b in CLOSING]
+            await _play_beats(session, narr, turn_id, closing, offset=len(beats))
     finally:
         for t in prep:
             t.cancel()
         session.briefing_question = None
         await session.send({"type": "showcase", "active": False})
         await session.state("idle")
+
+
+async def _ask(session: "Session", narr: Narrator, question: str, listen_s: float) -> str:
+    """Say the question, open the mic without a wake word and return what he said ('' if nothing)."""
+    await narr.play(question, await _synth(session, question))
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future[str] = loop.create_future()
+    session.briefing_question = fut
+    await session.listen_for_answer(listen_s)
+    try:
+        return (await asyncio.wait_for(fut, timeout=listen_s + 12)) or ""
+    except asyncio.TimeoutError:
+        return ""
+    finally:
+        session.briefing_question = None
 
 
 async def _ask_prep(session: "Session", narr: Narrator) -> bool:

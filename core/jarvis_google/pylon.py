@@ -14,6 +14,7 @@ Rules baked in (from the pylon-api / pylon-linear-linking / pylon-send-as-stephe
   * Linking a Linear issue makes Pylon move the ticket to On Hold (and may sync Priority): we report what changed.
 """
 from __future__ import annotations
+from jarvis_core.compat import wf
 
 import datetime as dt
 import html
@@ -406,7 +407,7 @@ def pylon_snooze(issue_id: str, until: str) -> dict:
     _req("POST", f"/issues/{issue_id}/snooze", json={"snooze_until": when.isoformat()})
     _audit("pylon_snooze", before, until=when.isoformat())
     t = _fresh(issue_id)
-    return {"ticket": t, "text": f"#{t['number']} snoozed until {when.astimezone():%a %b %-d, %-I:%M %p}"}
+    return {"ticket": t, "text": f"#{t['number']} snoozed until {when.astimezone().strftime(wf('%a %b %-d, %-I:%M %p'))}"}
 
 
 def _html(text: str) -> str:

@@ -14,6 +14,7 @@ from jarvis_google import artifacts as AR, generate as G, store
 def ws(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "STATE_DIR", tmp_path)
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "jarvis.db")
+    monkeypatch.setattr(store, "AUDIT_PATH", tmp_path / "actions.jsonl")
     monkeypatch.setattr(AR, "ART_DIR", tmp_path / "artifacts")
     monkeypatch.setattr(G, "JOBS", tmp_path / "gen_jobs.json")
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")

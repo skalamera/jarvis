@@ -11,9 +11,14 @@ legible, 8-bit, upright). The proxy is what the HUD plays and what Gemini watche
 Everything lives next to the artifact (STATE_DIR/artifacts/<aid>/); the original upload is never modified.
 """
 from __future__ import annotations
+from jarvis_core.compat import wf
 
 import contextlib
-import fcntl
+try:
+    import fcntl  # POSIX
+except ImportError:  # Windows
+    fcntl = None
+    import msvcrt
 import json
 import os
 import re
@@ -52,11 +57,18 @@ def _lock(aid: str, name: str = "prep"):
     with tl:
         _dir(aid).mkdir(parents=True, exist_ok=True)
         with open(_dir(aid) / f".{name}.lock", "w") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
+            if fcntl:
+                fcntl.flock(fh, fcntl.LOCK_EX)
+            else:
+                fh.write(" "); fh.flush(); fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
             try:
                 yield
             finally:
-                fcntl.flock(fh, fcntl.LOCK_UN)
+                if fcntl:
+                    fcntl.flock(fh, fcntl.LOCK_UN)
+                else:
+                    fh.seek(0); msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def _dir(aid: str) -> Path:
@@ -271,7 +283,7 @@ Return JSON only: {{"answer": a direct answer in 1-4 sentences, "moments": [{{"t
 
 
 def _today() -> str:
-    return time.strftime("%A, %B %-d, %Y")
+    return time.strftime(wf("%A, %B %-d, %Y"))
 
 
 def _generate(st: dict, prompt: str) -> dict:

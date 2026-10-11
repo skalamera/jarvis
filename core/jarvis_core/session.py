@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from zoneinfo import ZoneInfo
 import datetime as dt
 import logging
 import re
@@ -15,6 +16,7 @@ from jarvis_google import tools as gtools
 from . import visuals as V
 from .briefing import briefing
 from .config import settings
+from . import morning
 from .hermes_client import HermesClient, HermesError
 from .persona import build_instructions
 from .quick import quick_answer
@@ -122,6 +124,9 @@ class Session:
         self._audio_out = False             # speech sent to the HUD that it hasn't reported finished yet
         self.forge_pending = False          # a generated image/video is waiting in the center hologram
         self._tour_pending = False          # support_model(tour=True) ran this turn: narrate the tour after the reply
+        self.morning = morning.Morning()    # "Morning, Jarvis" briefing state
+        self._held: list[dict] = []          # morning briefing: video / song cards held until he's heard the words
+        self.last_reply = ""
         self.sleeping = False               # dimmed HUD; "Morning, Jarvis" powers it on (cinematic + daily briefing)
         self.mic: Any = None                # the MicPipeline (main.py), so sleep can switch it into sleep-word mode
         self.briefing_question: asyncio.Future | None = None  # the briefing is waiting for his answer to a question
@@ -400,6 +405,15 @@ class Session:
         if showcase.is_morning(text):
             await self.power_on()
             return
+        if morning.is_hello(text):
+            await self.start_morning()
+            return
+        if self.morning.active and text.strip():  # his reply mid-briefing: remind the model to carry on after
+            await self.cancel_turn()
+            self.turn_task = asyncio.create_task(self._turn(self._with_context(
+                text + "\n\n[Morning briefing in progress: respond to this, then continue with any parts you "
+                       "haven't covered yet, ending with the video and the song. If it's all done, just respond.]")))
+            return
         if showcase.is_trigger(text):
             await self.start_showcase("demo")
             return
@@ -414,6 +428,121 @@ class Session:
             return
         await self.cancel_turn()  # barge-in
         self.turn_task = asyncio.create_task(self._turn(self._with_context(text)))
+
+    async def start_morning(self) -> None:
+        """'Morning, Jarvis': greet instantly, gather today's data, then let the model run an unscripted briefing."""
+        await self.cancel_turn()
+
+        async def go():
+            now = dt.datetime.now(ZoneInfo(settings.timezone))
+            weekday = now.weekday() < 5
+            self.morning.start()
+            loop = asyncio.get_running_loop()
+            events: asyncio.Queue = asyncio.Queue()
+            progress = lambda *a: loop.call_soon_threadsafe(events.put_nowait, a)  # noqa: E731 (called from threads)
+            items = [{"key": k, "label": l} for k, l in morning.SCAN_ITEMS if weekday or k != "trains_to_manhattan"]
+            await self.send({"type": "ui", "op": "clear_cards"})
+            await self.send({"type": "morning_scan", "active": True, "items": items})
+            gathering = asyncio.create_task(asyncio.to_thread(morning.gather, weekday, progress))
+
+            async def relay():  # loading panel ticks + displays, the moment each part lands
+                while True:
+                    ev = await events.get()
+                    if ev[0] == "item":
+                        await self.send({"type": "morning_scan", "item": ev[1], "status": "ok" if ev[2] else "err"})
+                    elif ev[0] == "cards":
+                        for c in ev[1]:
+                            await self.send({"type": "card", "turn_id": "morning", "card": c})
+            relaying = asyncio.create_task(relay())
+            try:
+                filler = asyncio.create_task(self.morning.filler_audio(self.voice)) if self.speak else None
+                history = await asyncio.to_thread(morning.recent_history)
+                await asyncio.to_thread(morning.begin_log, now)
+                audio = await self.morning.greeting_audio(self.voice) if self.speak else None
+                await self.send({"type": "assistant_final", "turn_id": "morning_hello", "text": morning.GREETING})
+                if audio:
+                    await self.state("speaking")
+                    await self.send({"type": "speech", "turn_id": "morning_hello", "seq": 0, "text": morning.GREETING,
+                                     "audio": b64(audio), "mime": "audio/wav"})
+                if filler is not None:
+                    line, faudio = await filler
+                    if faudio:
+                        await self.send({"type": "speech", "turn_id": "morning_hello", "seq": 1, "text": line,
+                                         "audio": b64(faudio), "mime": "audio/wav"})
+                await self.send({"type": "speech_end", "turn_id": "morning_hello", "spoke": bool(audio)})
+                await self.state("thinking")
+                try:
+                    data, _cards = await gathering
+                except Exception as e:
+                    log.warning("morning gather failed: %s", e)
+                    data = {"error": str(e)}
+                await asyncio.sleep(0.2)  # let the last ticks / displays go out
+            finally:
+                relaying.cancel()
+            await self.send({"type": "morning_scan", "stage": "composing"})
+            try:
+                await self._turn(morning.build_prompt(data, history, now))
+            finally:
+                await self.send({"type": "morning_scan", "active": False})
+        self.turn_task = asyncio.create_task(go())
+
+    async def _wait_spoken(self, timeout: float = 120) -> None:
+        """Until the HUD has finished playing everything sent so far."""
+        self._played.clear()
+        if self._audio_out and self.speak:
+            try:
+                await asyncio.wait_for(self._played.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                pass
+
+    async def _announce(self, text: str, seq: int) -> None:
+        """Say one line and wait until it has played (the video / song comes right after it)."""
+        await self.send({"type": "assistant_final", "turn_id": f"morning_close_{seq}", "text": text})
+        if not self.speak:
+            return
+        try:
+            audio = await self.voice.tts(text)
+        except Exception as e:
+            log.warning("announce tts: %s", e)
+            return
+        await self.state("speaking")
+        self._audio_out = True
+        await self.send({"type": "speech", "turn_id": f"morning_close_{seq}", "seq": 0, "text": text,
+                         "audio": b64(audio), "mime": "audio/wav"})
+        await self._wait_spoken(timeout=30)
+
+    async def _release_held(self, turn_id: str, intros: dict | None = None) -> None:
+        """Morning briefing: once the HUD has finished speaking, introduce and put up the video (queued, paused),
+        then introduce and start the song."""
+        intros = intros or {}
+        held, self._held = self._held, []
+        await self._wait_spoken()
+        videos = [c for c in held if c.get("kind") == "video"]
+        music = [c for c in held if c.get("kind") == "music"]
+        others = [c for c in held if c not in videos and c not in music and c.get("kind") != "media_control"]
+        for c in others:
+            await self.send({"type": "card", "turn_id": turn_id, "card": c})
+        if videos:
+            await self._announce(intros.get("video") or morning.video_intro(videos[-1]), 0)
+            await self.send({"type": "card", "turn_id": turn_id, "card": videos[-1]})
+            await asyncio.sleep(1.2)
+            await self.send({"type": "card", "turn_id": turn_id, "card": V.card("media_control", "", {"action": "pause"})})
+        if music:
+            await asyncio.sleep(0.4)
+            await self._announce(intros.get("song") or morning.SONG_INTRO, 1)
+            await self.send({"type": "card", "turn_id": turn_id, "card": music[-1]})
+
+    def expects_answer(self) -> bool:
+        """The model just asked him something (ended on a question): listen longer for the reply."""
+        return self.last_reply.rstrip().rstrip("'\" ").endswith("?")
+
+    async def morning_silence(self) -> None:
+        """He didn't answer a question mid-briefing: carry on without him."""
+        if self.morning.active and self.expects_answer() and not self._busy():
+            self.last_reply = ""
+            self.turn_task = asyncio.create_task(self._turn(
+                "[No answer from Stephen. Carry on with the rest of the morning briefing from where you left off, "
+                "without asking again.]"))
 
     async def listen_for_answer(self, timeout_s: float) -> None:
         """The briefing asked a question: open the mic for his reply without the wake word (if voice is on)."""
@@ -497,9 +626,13 @@ class Session:
         await self.state("thinking")
         await self.send({"type": "turn_start", "turn_id": turn_id})
         feed_head = store.feed_head()
+        self._held = []
         instructions = build_instructions(settings.user_name, settings.timezone, self.notes)
         self.notes = []
-        sentences = V.SentenceStream()
+        long_form = self.morning.active
+        # the briefing is long: speak all of it (normal replies cap the spoken part), with pauses between sections
+        sentences = V.SentenceStream(max_spoken_chars=8000) if long_form else V.SentenceStream()
+        speech_text = (lambda t: morning.with_pauses(t)) if long_form else (lambda t: t)
         full = ""
         tools_running: dict[str, float] = {}
         acked = False
@@ -507,14 +640,19 @@ class Session:
         self._start_tts(turn_id)
         started = time.monotonic()
         try:
-            self.run_id = await self.hermes.start_run(text, self.session_id, instructions)
+            fast = self.morning.active and settings.morning_model  # the briefing (and his replies during it)
+            self.run_id = await self.hermes.start_run(text, self.session_id, instructions,
+                                                      settings.morning_model if fast else "",
+                                                      settings.morning_provider if fast else "")
             async for ev in self.hermes.events(self.run_id):
                 kind = ev.get("event")
                 if kind == "message.delta":
                     full += ev.get("delta") or ""
                     visible = V.partial_visible_text(full)
+                    if self.morning.active:  # the closing intro tags are spoken later, not as part of the text
+                        visible = morning.strip_intros(visible)
                     await self.send({"type": "assistant_delta", "turn_id": turn_id, "text": visible})
-                    for s in sentences.feed(visible):
+                    for s in sentences.feed(speech_text(visible)):
                         await self._say(turn_id, s)
                 elif kind == "tool.started":
                     name = ev.get("tool") or ""
@@ -548,6 +686,10 @@ class Session:
                         full = full or f"I hit a problem, sir: {err}"
                     break
             clean, vis_cards = V.extract_visuals(full)
+            intros = morning.parse_intros(clean) if self.morning.active else {}
+            if self.morning.active:
+                clean = morning.strip_intros(clean)
+                intros = self.morning.closing_for(intros, clean.rstrip().rstrip("'\" ").endswith("?"))
             await asyncio.sleep(0.35)  # let the feed poller flush the final tool results
             poll.cancel()
             await self._flush_feed(turn_id)
@@ -555,9 +697,22 @@ class Session:
                 await self.send({"type": "card", "turn_id": turn_id, "card": c})
             await self.send({"type": "assistant_final", "turn_id": turn_id, "text": clean,
                              "elapsed": round(time.monotonic() - started, 2)})
-            for s in sentences.feed(clean, final=True):
+            self.last_reply = clean or ""
+            if self.morning.active and not self.expects_answer():
+                self.morning.finish()
+            closing = None
+            if intros.get("video_query") or intros.get("song_query"):  # search while the briefing is being spoken
+                closing = asyncio.create_task(asyncio.to_thread(morning.fetch_closing, intros))
+            for s in sentences.feed(speech_text(clean), final=True):
                 await self._say(turn_id, s)
             await self._end_tts()
+            if closing is not None:
+                try:
+                    self._held += await closing
+                except Exception as e:
+                    log.warning("morning closing failed: %s", e)
+            if self._held:
+                await self._release_held(turn_id, intros)
             if self._tour_pending:  # support_model(tour=True): narrate the blueprint once the reply is queued
                 self._tour_pending = False
                 await showcase.support_tour(self, intro=None, show_card=False)
@@ -598,8 +753,12 @@ class Session:
             elif res.get("artifact"):
                 a = res["artifact"]
                 self.focus = {"type": "file", "id": a["id"], "filename": a["filename"], "kind": a["kind"]}
+            hold = self.morning.active and turn_id != "background" and item["tool"] in morning.MEDIA_TOOLS
             for c in V.cards_from_feed(item):
-                await self.send({"type": "card", "turn_id": turn_id, "card": c})
+                if hold:  # never start music / a video under the briefing: play it after the speech (see _turn)
+                    self._held.append(c)
+                else:
+                    await self.send({"type": "card", "turn_id": turn_id, "card": c})
             if item["tool"] in ("trip_plan", "trip_revise") and res.get("announce") and turn_id == "background" \
                     and not self.sleeping:
                 asyncio.create_task(self.say_line(res["announce"]))
@@ -708,11 +867,21 @@ class Session:
             sentence = await q.get()
             if sentence is None:
                 break
+            if sentence.strip() == morning.PAUSE_MARK:  # a section break: a beat of silence, never spoken
+                if spoke:
+                    await self.send({"type": "speech", "turn_id": turn_id, "seq": seq, "text": "",
+                                     "audio": b64(morning.silence_wav()), "mime": "audio/wav"})
+                    seq += 1
+                continue
             # merge sentences that are already waiting (up to a sensible size): one request, natural prosody
+            pending_pause = False
             while not q.empty() and len(sentence) < 220:
                 nxt = q.get_nowait()
                 if nxt is None:
                     q.put_nowait(None)
+                    break
+                if nxt.strip() == morning.PAUSE_MARK:
+                    pending_pause = True
                     break
                 sentence = f"{sentence} {nxt}"
             try:
@@ -728,6 +897,10 @@ class Session:
                              "audio": b64(audio), "mime": "audio/wav"})
             seq += 1
             spoke = True
+            if pending_pause:
+                await self.send({"type": "speech", "turn_id": turn_id, "seq": seq, "text": "",
+                                 "audio": b64(morning.silence_wav()), "mime": "audio/wav"})
+                seq += 1
         await self.send({"type": "speech_end", "turn_id": turn_id, "spoke": spoke})
         if not spoke and self._state != "confirm":
             await self.state("idle")

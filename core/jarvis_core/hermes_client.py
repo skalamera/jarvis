@@ -29,12 +29,12 @@ class HermesClient:
         except httpx.HTTPError:
             return False
 
-    async def start_run(self, text: str, session_id: str, instructions: str) -> str:
+    async def start_run(self, text: str, session_id: str, instructions: str, model: str = "", provider: str = "") -> str:
         body: dict[str, Any] = {"input": text, "session_id": session_id, "instructions": instructions}
-        if self.model:
-            body["model"] = self.model
-        if self.provider:
-            body["provider"] = self.provider
+        if model or self.model:
+            body["model"] = model or self.model
+        if provider or self.provider:
+            body["provider"] = provider or self.provider
         if self.reasoning:
             body["model_options"] = {"reasoning_effort": self.reasoning}
         try:

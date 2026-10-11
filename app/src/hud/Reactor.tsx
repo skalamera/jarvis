@@ -29,10 +29,12 @@ function useDrive() {
     const musicOn = viz.active && !s.asleep && !s.powerOnAt && s.hud === "idle";
     d.current.music += ((musicOn ? 1 : 0) - d.current.music) * (1 - Math.exp(-dt * 3));
     d.current.beat = viz.beat * d.current.music;
-    // power-on: 0-2.6 s charge (energy and spin climb), 2.7 s flare, then settle into the normal state
+    // power-on (8 s): a dim heartbeat in the dark, the charge climbing to the 5 s impact, a blinding flare, then settle
     const pt = s.powerOnAt ? (Date.now() - s.powerOnAt) / 1000 : -1;
-    const powering = pt >= 0 && pt < 4.2;
-    const flare = powering ? (pt < 2.7 ? (pt / 2.7) ** 2 * 0.9 : Math.max(0, 1.6 - (pt - 2.7) * 1.1)) : 0;
+    const powering = pt >= 0 && pt < 8.2;
+    const IMPACT = 5.0;
+    const heart = [0.45, 1.5, 2.45, 3.25, 3.85, 4.35, 4.7].reduce((m, b, i) => pt >= b ? Math.max(m, (0.35 + i * 0.06) * Math.exp(-(pt - b) * 7)) : m, 0);
+    const flare = powering ? (pt < IMPACT ? Math.max(heart, Math.max(0, (pt - 2) / (IMPACT - 2)) ** 2 * 0.75) : Math.max(0, 1.7 - (pt - IMPACT) * 0.55)) : 0;
     const target = powering ? flare * 0.8 : s.hud === "speaking" ? s.outLevel : s.hud === "listening" ? s.micLevel * 1.6 : 0;
     const k = 1 - Math.exp(-dt * 14);
     d.current.level += (Math.min(1, target) - d.current.level) * k;

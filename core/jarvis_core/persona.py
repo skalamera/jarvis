@@ -1,5 +1,6 @@
 """J.A.R.V.I.S. persona, layered on top of Hermes' own system prompt as run `instructions`."""
 from __future__ import annotations
+from .compat import wf
 
 import datetime as dt
 from zoneinfo import ZoneInfo
@@ -384,7 +385,7 @@ Honesty: never state that you did something unless a tool result confirms it. If
 
 def build_instructions(user: str, tz: str, notes: list[str] | None = None) -> str:
     now = dt.datetime.now(ZoneInfo(tz))
-    text = PERSONA.format(user=user, tz=tz, now=now.strftime("%A %B %-d %Y, %-I:%M %p"))
+    text = PERSONA.format(user=user, tz=tz, now=now.strftime(wf("%A %B %-d %Y, %-I:%M %p")))
     if notes:
         text += "\nSince your last reply:\n" + "\n".join(f"- {n}" for n in notes) + "\n"
     return text

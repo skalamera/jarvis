@@ -11,6 +11,7 @@ def mods(tmp_path, monkeypatch):
     monkeypatch.setenv("JARVIS_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("JARVIS_PROJECTS_DIR", str(tmp_path / "Projects"))
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     from jarvis_google import artifacts, code, store
     importlib.reload(store)
     importlib.reload(artifacts)

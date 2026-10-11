@@ -162,48 +162,47 @@ def _fake_beats(monkeypatch):
         def b():
             return S.Beat(label, f"{label} line.", [V.card("notice", label, {"text": label})], after_s=0)
         return b
-    names = ["_weather", "_commute", "_calendar", "_email", "_mag7", "_btc"]
+    names = ["_weather", "_mag7", "_btc", "_grandma", "_inbox_clear", "_video", "_music"]
     fakes = {n: mk(n.strip("_").upper()) for n in names}
-    fakes["_calendar"] = lambda: None  # a beat can opt out
-    fakes["_email"] = lambda: (_ for _ in ()).throw(RuntimeError("gmail down"))  # and fail
+    fakes["_inbox_clear"] = lambda: None  # a beat can opt out
+    fakes["_mag7"] = lambda: (_ for _ in ()).throw(RuntimeError("yahoo down"))  # and fail
     monkeypatch.setattr(S, "BRIEFING", [fakes[n] for n in names])
-    monkeypatch.setattr(S, "CLOSING", [mk("VIDEO"), mk("MUSIC")])
 
 
 def _spoken(s):
     return [m["text"] for m in s.sent if m["type"] == "speech"]
 
 
-def test_briefing_order_question_then_closing(monkeypatch):
+def test_briefing_welcome_date_quip_then_beats(monkeypatch):
     _fake_beats(monkeypatch)
-    s = FakeSession(answer="No, not yet")
+    s = FakeSession(answer="It was okay.")
     asyncio.run(S.run(s))
     lines = _spoken(s)
-    assert lines[0].startswith("Good ") and "your day" not in lines[0].lower()
-    assert lines[1:5] == ["WEATHER line.", "COMMUTE line.", "MAG7 line.", "BTC line."]
-    assert lines[5] == S.ASK_PREP and lines[6] in S._DECLINE_QUIPS
-    assert lines[7:] == ["VIDEO line.", "MUSIC line."]
-    assert s.listened == [S.ASK_PREP_LISTEN_S] and s.pending_input is None
+    assert lines[0] == S.ASK_DATE
+    assert lines[1] in S.DATE_QUIPS["meh"]
+    assert lines[2:] == ["WEATHER line.", "BTC line.", "GRANDMA line.", "VIDEO line.", "MUSIC line."]
+    assert S.ASK_PREP not in lines  # the meeting-prep question is skipped
+    assert s.listened == [S.ASK_DATE_LISTEN_S] and s.pending_input is None
     order = [m["type"] for m in s.sent if m["type"] in ("card", "speech")]
-    assert order[1:3] == ["card", "speech"]  # each beat's display lands before its line
+    assert order[2:4] == ["card", "speech"]  # each beat's display lands before its line
     assert s.sent[-1] == {"type": "state", "state": "idle"}
 
 
-def test_briefing_yes_hands_off_to_model(monkeypatch):
+def test_briefing_silence_gets_a_quip_and_carries_on(monkeypatch):
     _fake_beats(monkeypatch)
-    s = FakeSession(answer="Yes please")
-    asyncio.run(S.run(s))
-    lines = _spoken(s)
-    assert lines[-1] == S.ASK_PREP and "VIDEO line." not in lines
-    assert "prepare for my upcoming meetings" in s.pending_input
-
-
-def test_briefing_silence_counts_as_no(monkeypatch):
-    _fake_beats(monkeypatch)
-    monkeypatch.setattr(S, "ASK_PREP_LISTEN_S", 0.05)
+    monkeypatch.setattr(S, "ASK_DATE_LISTEN_S", 0.05)
     s = FakeSession(answer="")
     asyncio.run(S.run(s))
-    assert _spoken(s)[-2:] == ["VIDEO line.", "MUSIC line."]
+    lines = _spoken(s)
+    assert lines[1] in S.DATE_QUIPS["none"] and lines[-2:] == ["VIDEO line.", "MUSIC line."]
+
+
+@pytest.mark.parametrize("text,kind", [("It was okay.", "meh"), ("it was ok i guess", "meh"), ("not bad", "meh"),
+                                       ("It was amazing!", "good"), ("pretty terrible", "bad"), ("not great", "bad"),
+                                       ("", "none"), ("we went bowling", "other")])
+def test_date_kind(text, kind):
+    assert S.date_kind(text) == kind
+    assert S.date_quip(text) in S.DATE_QUIPS[kind]
 
 
 @pytest.mark.parametrize("text,kind", [("no", "no"), ("No, not yet.", "no"), ("not yet", "no"), ("nope", "no"),
@@ -268,8 +267,9 @@ def test_home_location_overrides_ip(monkeypatch):
     assert h["source"] == "home" and abs(h["lat"] - 40.9115) < 1e-6
 
 
-@pytest.mark.parametrize("text,kind", [("Morning, Jarvis.", "morning"), ("Good morning Jarvis!", "morning"),
-                                       ("morning jervis", "morning"), ("Jarvis, good morning.", "morning"),
+@pytest.mark.parametrize("text,kind", [("Wake up, Daddy's home.", "morning"), ("wake up daddy is home", "morning"),
+                                       ("Wake up. Dad's home!", "morning"), ("wakeup daddies home", "morning"),
+                                       ("Morning, Jarvis.", "hello"),
                                        ("Hey Jarvis", "wake"), ("hey jarvis what time is it", "wake"),
                                        ("morning everyone", None), ("pass the salt", None), ("", None)])
 def test_sleep_word(text, kind):
@@ -278,7 +278,8 @@ def test_sleep_word(text, kind):
 
 
 def test_morning_and_sleep_phrases():
-    assert S.is_morning("Morning, Jarvis") and S.is_morning("good morning jarvis.") and not S.is_morning("morning meeting at 9")
+    assert S.is_morning("Wake up, Daddy's home") and S.is_morning("wake up, daddy is home.")
+    assert not S.is_morning("Morning, Jarvis") and not S.is_morning("wake up early, my dad is home")
     for x in ["Jarvis, go to sleep", "goodnight jarvis", "Okay, go to sleep.", "power down"]:
         assert S.is_sleep_request(x), x
     assert not S.is_sleep_request("how did I sleep last night") and not S.is_sleep_request("schedule power down maintenance")

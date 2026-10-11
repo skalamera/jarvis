@@ -56,7 +56,7 @@ function StatusBar() {
       <button className={`tog ${micEnabled ? "on" : ""}`} onClick={() => core.setMic(!micEnabled)} title="Microphone">
         {micEnabled ? "🎙 MIC ON" : "🎙 MIC OFF"}
       </button>
-      <button className="tog" onClick={() => core.toggleSleep()} title="Sleep (⌘⇧S) · say “Morning, Jarvis” to power on">☾ SLEEP</button>
+      <button className="tog" onClick={() => core.toggleSleep()} title="Sleep (⌘⇧S) · say “Wake up, Daddy's home” to power on">☾ SLEEP</button>
       <button className="tog" onClick={() => core.reset()} title="New conversation">⟲ NEW</button>
     </div>
   );
@@ -189,6 +189,7 @@ const LAUNCH: { icon: string; label: string; run: () => void }[] = [
   { icon: "📅", label: "Calendar", run: () => core.launchCard({ kind: "calendar", title: "Calendar", account: "personal", data: { events: [] } }) },
   { icon: "✉", label: "Inbox", run: () => core.launchTool("gmail_search", { account: "personal", query: "in:inbox", max_results: 25 }) },
   { icon: "💬", label: "Slack", run: () => core.launchTool("slack_updates", {}) },
+  { icon: "𝕏", label: "X", run: () => core.launchCard({ kind: "x", title: "X · Home", account: null, data: { view: "home", url: "https://x.com/home" } }) },
   { icon: "🎫", label: "Pylon", run: () => core.launchTool("pylon_tickets", {}) },
   { icon: "🗂", label: "Files", run: () => viaRpc("file_list", {}, "launch_files", "Your files", "Files") },
 ];
@@ -565,6 +566,7 @@ export function Hud() {
       <DropZone />
       <Workbench />
       <ShowcaseHud />
+      <MorningScan />
       <SleepVeil />
       <PowerOn />
     </div>
@@ -581,7 +583,7 @@ function SleepVeil() {
         <motion.div className="sleep-veil" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.25 } }}
           transition={{ duration: 1.4, ease: "easeInOut" }} onClick={() => core.toggleSleep()}>
           <div className="sleep-hint">
-            <div className="sleep-t">{wake ? "Say “Morning, Jarvis”" : "Click to power on"}</div>
+            <div className="sleep-t">{wake ? "Say “Wake up, Daddy's home”" : "Click to power on"}</div>
             <div className="sleep-s">{wake ? "or “Hey Jarvis” · ⌘⇧S" : "⌘⇧S"}</div>
           </div>
         </motion.div>
@@ -590,39 +592,60 @@ function SleepVeil() {
   );
 }
 
-/** "Morning, Jarvis": a short boot sequence over the HUD (scan line, rings charging, system checks, flare). */
+/** "Wake up, Daddy's home": the cinematic boot (8 s; IMPACT at 5 s, matching Speaker.powerOn and the reactor).
+ *  0-2 s darkness, a heartbeat glow in the orb and a voiceprint check; 2-5 s grid, scan line, systems coming online
+ *  as the charge builds; 5 s the hit (white flash, shockwaves, screen shake, flare); then the title and the HUD. */
+export const BOOT_S = 8, BOOT_IMPACT_S = 5;
 const BOOT_LINES = ["CORE", "NEURAL INTERFACE", "VOICE SYNTHESIS", "COMMS ARRAY", "MARKET FEEDS", "ALL SYSTEMS"];
+const BOOT_ID = ["VOICEPRINT RECEIVED", "ANALYZING", "IDENTITY CONFIRMED · STEPHEN"];
+const BOOT_BEATS = [0.45, 1.5, 2.45, 3.25, 3.85, 4.35, 4.7];
 function PowerOn() {
   const at = useStore((s) => s.powerOnAt);
   const [n, setN] = useState(0);
+  const [idn, setIdn] = useState(0);
   const [c, setC] = useState({ x: 50, y: 40, r: 26 });  // centre the rings/flare on the orb (vw/vh, vmin)
   useEffect(() => {
     if (!at) return;
-    setN(0);
+    setN(0); setIdn(0);
     const el = document.querySelector(".reactor-wrap") as HTMLElement | null;
     if (el) {
       const b = el.getBoundingClientRect();
       const vmin = Math.min(innerWidth, innerHeight) / 100;
       setC({ x: ((b.left + b.width / 2) / innerWidth) * 100, y: ((b.top + b.height / 2) / innerHeight) * 100, r: Math.min(b.width, b.height) / 2 / vmin * 0.62 });
     }
-    const ts = BOOT_LINES.map((_, i) => window.setTimeout(() => setN(i + 1), 380 + i * 360));
-    return () => ts.forEach(window.clearTimeout);
+    const ts = [
+      ...BOOT_ID.map((_, i) => window.setTimeout(() => setIdn(i + 1), 450 + i * 650)),
+      ...BOOT_LINES.map((_, i) => window.setTimeout(() => setN(i + 1), 2300 + i * 420)),
+      window.setTimeout(() => document.body.classList.add("boot-shake"), BOOT_IMPACT_S * 1000),
+      window.setTimeout(() => document.body.classList.remove("boot-shake"), BOOT_IMPACT_S * 1000 + 700),
+    ];
+    return () => { ts.forEach(window.clearTimeout); document.body.classList.remove("boot-shake"); };
   }, [at]);
+  const T = (sec: number) => sec / BOOT_S;  // seconds -> keyframe time
+  const heartTimes = [0, ...BOOT_BEATS.flatMap((b) => [T(b), T(b + 0.08), T(b + 0.5)]), 1];
+  const heartOpacity = [0, ...BOOT_BEATS.flatMap((_, i) => [0.25 + i * 0.06, 0.9, 0.2 + i * 0.05]), 0];
+  const heartScale = [0.6, ...BOOT_BEATS.flatMap((_, i) => [0.7 + i * 0.05, 1.05 + i * 0.07, 0.8 + i * 0.05]), 1];
   return createPortal(
     <AnimatePresence>
       {at > 0 && (
-        <motion.div key={at} className="boot" initial={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.6 } }}>
-          <motion.div className="boot-dark" initial={{ opacity: 0.92 }} animate={{ opacity: [0.92, 0.85, 0.6, 0] }}
-            transition={{ duration: 3.4, times: [0, 0.5, 0.78, 1], ease: "easeInOut" }} />
-          <motion.div className="boot-scan" initial={{ top: "-4%" }} animate={{ top: "104%" }} transition={{ duration: 1.5, ease: [0.5, 0, 0.3, 1] }} />
-          <div className="boot-rings" style={{ left: `${c.x}vw`, top: `${c.y}vh`, ["--r" as any]: `${c.r}vmin` }}>
-            {[0, 1, 2].map((i) => (
-              <motion.i key={i} initial={{ scale: 0.2, opacity: 0 }} animate={{ scale: [0.2, 1, 1.12 + i * 0.3], opacity: [0, 0.9, 0] }}
-                transition={{ duration: 1.3, delay: 1.5 + i * 0.32, ease: "easeOut" }} />
+        <motion.div key={at} className="boot" initial={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.8 } }}>
+          <motion.div className="boot-dark" initial={{ opacity: 1 }} animate={{ opacity: [1, 0.97, 0.9, 0.55, 0] }}
+            transition={{ duration: BOOT_S, times: [0, T(4.9), T(5.0), T(6.0), T(7.6)], ease: "easeInOut" }} />
+          <motion.div className="boot-grid" initial={{ opacity: 0 }} animate={{ opacity: [0, 0, 0.55, 0.9, 0, 0] }}
+            transition={{ duration: BOOT_S, times: [0, T(2.0), T(3.4), T(4.95), T(5.4), 1] }} />
+          <motion.div className="boot-heart" style={{ left: `${c.x}vw`, top: `${c.y}vh`, ["--r" as any]: `${c.r}vmin` }}
+            initial={{ opacity: 0 }} animate={{ opacity: heartOpacity, scale: heartScale }}
+            transition={{ duration: BOOT_S * T(5.1), times: heartTimes.map((x) => Math.min(1, x / T(5.1))) }} />
+          <motion.div className="boot-scan" initial={{ top: "-4%", opacity: 0 }} animate={{ top: ["-4%", "-4%", "104%"], opacity: [0, 1, 1] }}
+            transition={{ duration: 3.4, times: [0, 0.59, 1], ease: [0.5, 0, 0.3, 1] }} />
+          <div className="boot-id" style={{ left: `${c.x}vw`, top: `calc(${c.y}vh + ${c.r * 1.3}vmin)` }}>
+            {BOOT_ID.slice(0, idn).map((l, i) => (
+              <motion.div key={l} initial={{ opacity: 0, y: 6 }} animate={{ opacity: [0, 1, 1, 0], y: 0 }}
+                transition={{ duration: 4.6 - i * 0.65, times: [0, 0.06, 0.85, 1] }} className={i === BOOT_ID.length - 1 ? "ok" : ""}>
+                {l}{i === 1 ? <span className="boot-dots" /> : null}
+              </motion.div>
             ))}
           </div>
-          <motion.div className="boot-flare" style={{ left: `${c.x}vw`, top: `${c.y}vh` }} initial={{ opacity: 0, scale: 0.4 }} animate={{ opacity: [0, 0, 1, 0], scale: [0.4, 0.4, 1.6, 2.4] }}
-            transition={{ duration: 3.4, times: [0, 0.78, 0.82, 1] }} />
           <div className="boot-log">
             {BOOT_LINES.slice(0, n).map((l, i) => (
               <motion.div key={l} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} className={i === BOOT_LINES.length - 1 ? "last" : ""}>
@@ -630,8 +653,54 @@ function PowerOn() {
               </motion.div>
             ))}
           </div>
-          <motion.div className="boot-title" style={{ left: `${c.x}vw`, top: `calc(${c.y}vh + ${c.r * 1.25}vmin)` }} initial={{ opacity: 0, letterSpacing: "1.2em" }} animate={{ opacity: [0, 0, 1, 1, 0], letterSpacing: ["1.2em", "1.2em", "0.55em", "0.5em", "0.5em"] }}
-            transition={{ duration: 4, times: [0, 0.55, 0.75, 0.9, 1] }}>J.A.R.V.I.S.</motion.div>
+          <motion.div className="boot-white" initial={{ opacity: 0 }} animate={{ opacity: [0, 0, 1, 0.35, 0] }}
+            transition={{ duration: BOOT_S, times: [0, T(4.98), T(5.03), T(5.25), T(5.9)] }} />
+          <div className="boot-rings" style={{ left: `${c.x}vw`, top: `${c.y}vh`, ["--r" as any]: `${c.r}vmin` }}>
+            {[0, 1, 2, 3].map((i) => (
+              <motion.i key={i} initial={{ scale: 0.2, opacity: 0 }} animate={{ scale: [0.2, 1, 2.2 + i * 1.1], opacity: [0, 0.95, 0] }}
+                transition={{ duration: 1.6 + i * 0.25, delay: BOOT_IMPACT_S + i * 0.14, ease: "easeOut" }} />
+            ))}
+          </div>
+          <motion.div className="boot-flare" style={{ left: `${c.x}vw`, top: `${c.y}vh` }} initial={{ opacity: 0, scale: 0.4 }}
+            animate={{ opacity: [0, 0, 1, 0.5, 0], scale: [0.3, 0.3, 1.9, 2.6, 3.2] }}
+            transition={{ duration: BOOT_S, times: [0, T(4.98), T(5.06), T(5.8), T(7.0)] }} />
+          <motion.div className="boot-title" style={{ left: `${c.x}vw`, top: `calc(${c.y}vh + ${c.r * 1.25}vmin)` }} initial={{ opacity: 0, letterSpacing: "1.4em" }}
+            animate={{ opacity: [0, 0, 1, 1, 0], letterSpacing: ["1.4em", "1.4em", "0.6em", "0.5em", "0.5em"] }}
+            transition={{ duration: BOOT_S, times: [0, T(5.3), T(6.0), T(7.4), 1] }}>J.A.R.V.I.S.</motion.div>
+          <motion.div className="boot-sub" style={{ left: `${c.x}vw`, top: `calc(${c.y}vh + ${c.r * 1.25}vmin + 44px)` }} initial={{ opacity: 0 }}
+            animate={{ opacity: [0, 0, 1, 1, 0] }} transition={{ duration: BOOT_S, times: [0, T(5.9), T(6.4), T(7.5), 1] }}>
+            WELCOME HOME, SIR
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>,
+    document.body,
+  );
+}
+
+/** "Morning, Jarvis": today's sources lighting up as they load, then "composing", until the briefing speaks. */
+function MorningScan() {
+  const sc = useStore((s) => s.morningScan);
+  const done = sc ? sc.items.filter((i) => i.status).length : 0;
+  return createPortal(
+    <AnimatePresence>
+      {sc && (
+        <motion.div className="ms-hud" initial={{ opacity: 0, y: -14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10, transition: { duration: 0.4 } }}>
+          <div className="ms-head">
+            <span className="sc-dot" />
+            <AnimatePresence mode="wait">
+              <motion.span key={sc.stage} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                {sc.stage === "composing" ? "COMPOSING YOUR BRIEFING" : "COMPILING YOUR DAY"}<span className="boot-dots" />
+              </motion.span>
+            </AnimatePresence>
+            <span className="ms-count">{done}/{sc.items.length}</span>
+          </div>
+          <div className="ms-items">
+            {sc.items.map((i) => (
+              <span key={i.key} className={`ms-item ${i.status ?? "wait"}`}><i />{i.label}</span>
+            ))}
+          </div>
+          <div className="ms-bar"><motion.i animate={{ width: sc.stage === "composing" ? "100%" : `${(done / Math.max(1, sc.items.length)) * 92}%` }} transition={{ duration: 0.5 }} /></div>
         </motion.div>
       )}
     </AnimatePresence>,

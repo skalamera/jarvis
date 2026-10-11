@@ -20,3 +20,7 @@ client_secret*.json
 token*.json
 
 .DS_Store
+
+# voice_server: large model downloads + runtime logs
+voice_server/models/
+*.log

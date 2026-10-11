@@ -525,25 +525,37 @@ def _video_row(e: dict) -> dict:
             "url": f"https://www.youtube.com/watch?v={vid}"}
 
 
-def youtube_search(query: str, n: int = 10) -> list[dict]:
+# YouTube's own "upload date" search filters (relevance-ranked within the window)
+_RECENT_SP = {"day": "EgIIAg%3D%3D", "today": "EgIIAg%3D%3D", "week": "EgIIAw%3D%3D", "month": "EgIIBA%3D%3D"}
+
+
+def youtube_search(query: str, n: int = 10, recent: str = "") -> list[dict]:
     import yt_dlp
+    from urllib.parse import quote_plus
+    sp = _RECENT_SP.get((recent or "").lower().strip(), "")
 
     def run() -> list[dict]:
-        opts: Any = {"quiet": True, "no_warnings": True, "extract_flat": True, "skip_download": True}
+        opts: Any = {"quiet": True, "no_warnings": True, "extract_flat": True, "skip_download": True,
+                     "playlistend": n}
         with yt_dlp.YoutubeDL(opts) as y:
-            info: Any = y.extract_info(f"ytsearch{n}:{query}", download=False)
+            src = (f"https://www.youtube.com/results?search_query={quote_plus(query)}&sp={sp}" if sp
+                   else f"ytsearch{n}:{query}")
+            info: Any = y.extract_info(src, download=False)
         rows = [_video_row(e) for e in (info or {}).get("entries") or [] if e and e.get("id")]
-        return [r for r in rows if r["duration"] is None or r["duration"] > 0]
-    return _cached(f"v|{n}|{query.lower().strip()}", 1800, run)
+        rows = [r for r in rows if len(r["video_id"]) == 11]  # drop channel / playlist entries
+        return [r for r in rows if r["duration"] is None or r["duration"] > 0][:n]
+    return _cached(f"v|{n}|{sp}|{query.lower().strip()}", 1800, run)
 
 
-def youtube_video(query: str = "", video_id: str = "", record: bool = True) -> dict:
+def youtube_video(query: str = "", video_id: str = "", record: bool = True, recent: str = "") -> dict:
     q = (query or "").strip()
     m = _VID.search(q) or _VID.search(video_id or "")
     vid = m.group(1) if m else (video_id if re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id or "") else "")
     if not q and not vid:
         return {"error": "Say what to watch."}
-    results = youtube_search(q, 10) if q and not m else []
+    results = (youtube_search(q, 10, recent) if recent else youtube_search(q, 10)) if q and not m else []
+    if not results and recent and q and not m:  # nothing that recent: fall back to all time
+        results = youtube_search(q, 10)
     if vid:
         cur = next((r for r in results if r["video_id"] == vid), None) or {
             "video_id": vid, "title": "", "channel": "", "duration": None, "views": None, "live": False,

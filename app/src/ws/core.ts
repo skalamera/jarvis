@@ -318,9 +318,28 @@ class CoreLink {
         break;
       case "speech":
         if (m.audio) this.speaker?.enqueue(m.turn_id, m.seq, m.audio, m.text);
+        if (s.morningScan && m.turn_id !== "morning_hello" && !m.ack) {  // the briefing itself has started
+          s.set({ morningScan: null });
+          this.speaker?.ambient(false);
+        }
         break;
       case "stop_audio":
         this.speaker?.stop();
+        if (s.morningScan) { s.set({ morningScan: null }); this.speaker?.ambient(false); }
+        break;
+      case "morning_scan":
+        if (m.active === false) {
+          s.set({ morningScan: null });
+          this.speaker?.ambient(false);
+        } else if (m.items) {
+          s.set({ morningScan: { items: m.items, stage: "gathering" } });
+          this.speaker?.ambient(true);
+        } else if (m.item && s.morningScan) {
+          s.set({ morningScan: { ...s.morningScan, items: s.morningScan.items.map((i) => (i.key === m.item ? { ...i, status: m.status } : i)) } });
+          this.speaker?.chime("click");
+        } else if (m.stage && s.morningScan) {
+          s.set({ morningScan: { ...s.morningScan, stage: m.stage } });
+        }
         break;
       case "speak":
         s.set({ speak: m.enabled });

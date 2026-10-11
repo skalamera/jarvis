@@ -34,6 +34,9 @@ class Settings:
     hermes_provider: str = os.environ.get("JARVIS_PROVIDER", "")
     # Per-request thinking level for JARVIS turns only (Hermes default is medium). "low" measured ~40% faster
     # to first spoken word on tool questions; "" = Hermes default, "none" = no thinking.
+    # "Morning, Jarvis" runs on a faster model so it starts talking sooner ("" = same as everything else)
+    morning_model: str = os.environ.get("JARVIS_MORNING_MODEL", "claude-sonnet-5")
+    morning_provider: str = os.environ.get("JARVIS_MORNING_PROVIDER", "anthropic")
     hermes_reasoning: str = os.environ.get("JARVIS_REASONING", "low")
 
     voice_url: str = os.environ.get("VOICESTUDIO_URL", "http://127.0.0.1:3900")
