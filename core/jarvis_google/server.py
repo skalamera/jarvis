@@ -405,6 +405,44 @@ def x_open(view: str = "home", query: str = "", latest: bool = True, user: str =
         return json.dumps({"error": f"{type(e).__name__}: {e}"})
 
 
+# ------------------------------------------------------------------ Instagram / Facebook / LinkedIn
+def _social(site: str, view: str, query: str, kind: str, user: str) -> str:
+    from . import social as SO
+    try:
+        return json.dumps(SO.social_open(site, view, query, kind, user), default=str)
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+
+@mcp.tool()
+def instagram_open(view: str = "home", query: str = "", user: str = "") -> str:
+    """Open the Instagram display: the real instagram.com in the HUD. view = "home" (his feed), "explore", "reels",
+    "messages" (DMs), "notifications", "saved"; or query = a search ("formula 1", or "#mercedes" for a hashtag);
+    or user = a handle to open their profile ("natgeo"). This only OPENS the page (signed in as Stephen):
+    you can't read posts yourself, so say what you've put on screen and don't summarize posts you haven't seen."""
+    return _social("instagram", view, query, "", user)
+
+
+@mcp.tool()
+def facebook_open(view: str = "home", query: str = "", kind: str = "", user: str = "") -> str:
+    """Open the Facebook display: the real facebook.com in the HUD. view = "home" (his feed), "watch",
+    "marketplace", "groups", "messages", "notifications", "friends", "events"; or query = a search, with kind =
+    "people" | "posts" | "groups" | "videos" | "pages" | "marketplace" (default: top results); or user = a profile
+    username / page name ("zuck"). This only OPENS the page (signed in as Stephen):
+    you can't read posts yourself, so say what you've put on screen and don't summarize posts you haven't seen."""
+    return _social("facebook", view, query, kind, user)
+
+
+@mcp.tool()
+def linkedin_open(view: str = "home", query: str = "", kind: str = "", user: str = "") -> str:
+    """Open the LinkedIn display: the real linkedin.com in the HUD. view = "home" (his feed), "network", "jobs",
+    "messages", "notifications", "me" (his profile); or query = a search, with kind = "people" | "companies" |
+    "posts" | "jobs" (default: all); or user = a profile vanity name ("satyanadella") or "company:<slug>"
+    ("company:hadrius"). This only OPENS the page (signed in as Stephen):
+    you can't read posts yourself, so say what you've put on screen and don't summarize posts you haven't seen."""
+    return _social("linkedin", view, query, kind, user)
+
+
 # ------------------------------------------------------------------ Slack (read-only)
 @mcp.tool()
 def slack_updates() -> str:

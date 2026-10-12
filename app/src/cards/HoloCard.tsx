@@ -8,6 +8,7 @@ import { useStore } from "../state/store";
 import type { Card } from "../types";
 import { WebAppCard } from "./WebAppCard";
 import { XCard } from "./XCard";
+import { FacebookCard, InstagramCard, LinkedInCard } from "./SocialCard";
 import { KalshiCard } from "./KalshiCards";
 import { CareerOpsCard } from "./CareerOpsCard";
 import { TripCard } from "./TripCard";
@@ -42,6 +43,9 @@ const BODY: Record<string, (p: { card: Card }) => React.ReactElement> = {
   launch_files: LaunchFilesCard,
   webapp: WebAppCard,
   x: XCard,
+  instagram: InstagramCard,
+  facebook: FacebookCard,
+  linkedin: LinkedInCard,
   kalshi: KalshiCard,
   career_ops: CareerOpsCard,
   trip: TripCard,
@@ -99,7 +103,7 @@ const BODY: Record<string, (p: { card: Card }) => React.ReactElement> = {
 };
 
 const KIND_LABEL: Record<string, string> = {
-  email_list: "MAIL", email: "MESSAGE", thread: "THREAD", draft: "DRAFT", confirm: "AUTHORIZE", calendar: "CALENDAR", launch_files: "FILES", webapp: "WEB APP", x: "X", kalshi: "KALSHI", career_ops: "CAREER OPS", trip: "TRIP PLANNER",
+  email_list: "MAIL", email: "MESSAGE", thread: "THREAD", draft: "DRAFT", confirm: "AUTHORIZE", calendar: "CALENDAR", launch_files: "FILES", webapp: "WEB APP", x: "X", instagram: "INSTAGRAM", facebook: "FACEBOOK", linkedin: "LINKEDIN", kalshi: "KALSHI", career_ops: "CAREER OPS", trip: "TRIP PLANNER",
   files: "DRIVE", document: "DOCUMENT", notice: "STATUS", "visual.chart": "ANALYSIS", "visual.stats": "TELEMETRY",
   "visual.table": "DATA", "visual.list": "INDEX", "visual.image": "IMAGE", "visual.link": "LINK", "visual.markdown": "BRIEF", "visual.map": "NAVIGATION", weather: "WEATHER", pylon_list: "PYLON", pylon_ticket: "TICKET", places: "PLACES", place: "PLACE", directions: "ROUTE", stock: "MARKETS", stock_compare: "COMPARE", market: "MARKETS", crypto: "CRYPTO", slack: "SLACK", sports_game: "SPORTS", sports_scoreboard: "SCORES", music: "MUSIC", video: "VIDEO", artifact: "FILE", codebase: "CODEBASE", code_file: "SOURCE", code_changes: "CHANGES", support_blueprint: "BLUEPRINT", car_listings: "LISTINGS", garage: "GARAGE", eats_stores: "UBER EATS", trade_desk: "TRADING DESK", trade_insights: "INTELLIGENCE", trade_alert: "MARKET ALERT", trade_order: "ORDER", trade_orders: "ORDERS", eats_menu: "MENU", eats_cart: "CART", garage_search: "RECORDS", garage_diagnosis: "DIAGNOSTICS", video_analysis: "VIDEO ANALYSIS", garage_plan: "BUILD PLAN", generating: "STUDIO", travel_flights: "FLIGHTS", travel_hotels: "HOTELS", travel_car_rentals: "RENTALS", travel_restaurants: "RESERVATIONS", booking_confirmed: "BOOKED", travel_reservations: "ITINERARY",
 };

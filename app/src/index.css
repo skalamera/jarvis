@@ -2857,4 +2857,9 @@ a.md-album.md-link { align-self: flex-start; width: fit-content; max-width: 100%
 .xc-search input:focus { border-color: rgba(159, 240, 255, 0.6); }
 .xc-mode { font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.12em; padding: 0 10px; border-radius: 99px; color: var(--muted); background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(159, 240, 255, 0.14); cursor: pointer; }
 .xc-mode.on { color: #e9fbff; border-color: rgba(159, 240, 255, 0.55); }
+.so-logo { width: 22px; height: 22px; margin: 0 2px; filter: drop-shadow(0 0 6px var(--brand, rgba(159, 240, 255, 0.6))); }
+.holo:not(.holo-xl) .so .xc-search { flex-wrap: wrap; }
+.holo:not(.holo-xl) .so .xc-search input { flex-basis: 100%; }
+.so .xc-mode { padding: 5px 10px; }
+.so .xc-tab.on, .so .xc-mode.on { border-color: var(--brand); box-shadow: 0 0 10px color-mix(in srgb, var(--brand) 45%, transparent); }
 .xc-view { flex: 1 1 auto; min-height: 0; width: 100%; border: 1px solid var(--cy-line); border-radius: 8px; overflow: hidden; background: #000; }

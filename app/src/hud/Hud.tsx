@@ -190,6 +190,9 @@ const LAUNCH: { icon: string; label: string; run: () => void }[] = [
   { icon: "✉", label: "Inbox", run: () => core.launchTool("gmail_search", { account: "personal", query: "in:inbox", max_results: 25 }) },
   { icon: "💬", label: "Slack", run: () => core.launchTool("slack_updates", {}) },
   { icon: "𝕏", label: "X", run: () => core.launchCard({ kind: "x", title: "X · Home", account: null, data: { view: "home", url: "https://x.com/home" } }) },
+  { icon: "📷", label: "Instagram", run: () => core.launchCard({ kind: "instagram", title: "Instagram · Feed", account: null, data: { view: "home", url: "https://www.instagram.com/" } }) },
+  { icon: "f", label: "Facebook", run: () => core.launchCard({ kind: "facebook", title: "Facebook · Feed", account: null, data: { view: "home", url: "https://www.facebook.com/" } }) },
+  { icon: "in", label: "LinkedIn", run: () => core.launchCard({ kind: "linkedin", title: "LinkedIn · Feed", account: null, data: { view: "home", url: "https://www.linkedin.com/feed/" } }) },
   { icon: "🎫", label: "Pylon", run: () => core.launchTool("pylon_tickets", {}) },
   { icon: "🗂", label: "Files", run: () => viaRpc("file_list", {}, "launch_files", "Your files", "Files") },
 ];

@@ -110,6 +110,9 @@ def cards_from_feed(item: dict) -> list[dict]:
         return [card("slack", "Slack · Hadrius", r)]
     if tool == "x_open":
         return [card("x", r.get("title") or "X", r)]
+    if tool in ("instagram_open", "facebook_open", "linkedin_open"):
+        site = tool.removesuffix("_open")
+        return [card(site, r.get("title") or site.title(), r)]
     if tool == "slack_search":
         return [card("slack", f"Slack · “{r.get('query', '')}”", r)]
     if tool == "stock_quote":
