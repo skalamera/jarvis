@@ -9,6 +9,9 @@ from jarvis_core import morning as M
 
 @pytest.mark.parametrize("text,ok", [("Morning, Jarvis", True), ("Good morning, Jarvis.", True), ("Jarvis, good morning!", True),
                                      ("morning jervis", True), ("morning meeting at 9", False),
+                                     ("Good afternoon, Jarvis", True), ("good evening jarvis", True),
+                                     ("Jarvis, good evening.", True), ("Afternoon, Jarvis", True),
+                                     ("good evening everyone", False), ("what's on this evening, jarvis?", False),
                                      ("Wake up, Daddy's home", False), ("what's on this morning, jarvis?", False)])
 def test_is_hello(text, ok):
     assert M.is_hello(text) is ok
@@ -31,8 +34,29 @@ def test_prompt_carries_data_rules_and_history():
     weekend = M.build_prompt({}, [], dt.datetime(2026, 10, 11, 9, 0, tzinfo=M._tz()))
     assert "no train info" in weekend
     # the day's tone varies by date
-    tones = {M.build_prompt({}, [], now + dt.timedelta(days=i)).split("Today's tone: ")[1].split(".")[0] for i in range(10)}
+    tones = {M.build_prompt({}, [], now + dt.timedelta(days=i)).split("Tone: ")[1].split(".")[0] for i in range(10)}
     assert len(tones) > 1
+    assert "[MORNING BRIEFING]" in p and "from New Rochelle into Grand Central" in p and "start the day" in p
+
+
+@pytest.mark.parametrize("hour,part", [(7, "morning"), (11, "morning"), (12, "afternoon"), (16, "afternoon"),
+                                       (17, "evening"), (22, "evening")])
+def test_part_of_day(hour, part):
+    assert M.part_of_day(dt.datetime(2026, 10, 12, hour, 0, tzinfo=M._tz())) == part
+
+
+def test_afternoon_and_evening_prompts_drop_the_morning_bits():
+    aft = M.build_prompt({}, [], dt.datetime(2026, 10, 12, 14, 0, tzinfo=M._tz()))  # Monday afternoon
+    eve = M.build_prompt({}, [], dt.datetime(2026, 10, 12, 19, 30, tzinfo=M._tz()))
+    assert "[AFTERNOON BRIEFING]" in aft and '"Good afternoon, sir."' in aft and "LEFT of today" in aft
+    assert "home from Grand Central to New Rochelle" in aft and "song for the afternoon" in aft
+    assert "[EVENING BRIEFING]" in eve and '"Good evening, sir."' in eve and "TOMORROW's calendar" in eve
+    assert "how the markets closed" in eve and "unwind" in eve
+    for p in (aft, eve):
+        assert "start the day" not in p and "RECENT MORNINGS" not in p and "into Grand Central" not in p
+    assert M.train_leg("morning") == (M.NEW_ROCHELLE, M.GRAND_CENTRAL)
+    assert M.train_leg("evening") == (M.GRAND_CENTRAL, M.NEW_ROCHELLE)
+    assert set(M.GREETINGS) == set(M.FILLERS) == set(M.SONG_INTROS) == set(M.PARTS)
 
 
 def test_history_from_feed(tmp_path, monkeypatch):
@@ -75,26 +99,27 @@ def test_start_morning_greets_first_then_hands_to_model(monkeypatch):
         prompts.append(text)
         s.last_reply = "Shall I help you prep for the Acme demo?"
     s._turn = turn
-    def fake_gather(weekday, progress=None):
+    def fake_gather(weekday, progress=None, part="morning"):
         progress("cards", [{"id": "c1", "kind": "weather"}])
         progress("item", "weather", True)
         return {"weather": {"ok": 1}}, [{"id": "c1", "kind": "weather"}]
     monkeypatch.setattr(M, "gather", fake_gather)
     monkeypatch.setattr(M, "recent_history", lambda: [])
     monkeypatch.setattr(M, "begin_log", lambda now: None)
+    monkeypatch.setattr(M, "part_of_day", lambda now: "evening")
 
     async def go():
         await s.start_morning()
         await s.turn_task
     asyncio.run(go())
     speech = [m for m in sent if m["type"] == "speech"]
-    assert speech[0]["text"] == M.GREETING and speech[1]["text"] in M.FILLERS  # greeting, then a filler line
+    assert speech[0]["text"] == "Good evening, sir." and speech[1]["text"] in M.FILLERS["evening"]  # greeting, then a filler line
     scan = [m for m in sent if m["type"] == "morning_scan"]
     assert scan[0]["active"] and {"key": "weather", "label": "WEATHER"} in scan[0]["items"]
     assert {"type": "morning_scan", "item": "weather", "status": "ok"} in scan
     assert {"type": "morning_scan", "stage": "composing"} in scan and scan[-1] == {"type": "morning_scan", "active": False}
     assert any(m["type"] == "card" for m in sent)
-    assert prompts and "[MORNING BRIEFING]" in prompts[0]
+    assert prompts and "[EVENING BRIEFING]" in prompts[0] and s.morning.song_intro == M.SONG_INTROS["evening"]
     assert s.morning.active and s.expects_answer()  # it asked something: the briefing waits for his answer
 
 

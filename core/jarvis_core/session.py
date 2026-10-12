@@ -169,14 +169,15 @@ class Session:
             await self.state("idle")
 
     async def power_on(self) -> None:
-        """'Morning, Jarvis': the HUD plays its short power-on sequence while the briefing gathers, then the briefing."""
+        """'Wake up, Daddy's home': the HUD plays its short power-on sequence while the briefing gathers, then the
+        time-of-day briefing."""
         await self.cancel_turn()
         self.sleeping = False
         if self.mic is not None:
             self.mic.sleeping = False
         await self.send({"type": "power_on", "ms": int(showcase.POWER_ON_S * 1000)})
         await self.send({"type": "sleep", "asleep": False})
-        await self.start_showcase("demo", intro_delay=showcase.POWER_ON_S)
+        await self.start_morning(intro_delay=showcase.POWER_ON_S)
 
     async def state(self, s: str) -> None:
         if s != self._state:
@@ -281,8 +282,11 @@ class Session:
             self._audio_out = False
             if self._state == "speaking" and not self._busy():
                 await self.state("idle")
-        elif t == "showcase":
-            await self.start_showcase(str(msg.get("which") or "demo"))
+        elif t == "showcase":  # the HUD's briefing button / ⌘⇧D: the time-of-day briefing (or the support tour)
+            if msg.get("which") == "support_tour":
+                await self.start_showcase("support_tour")
+            else:
+                await self.start_morning()
         elif t == "direct":
             await self._direct(msg)
 
@@ -411,11 +415,8 @@ class Session:
         if self.morning.active and text.strip():  # his reply mid-briefing: remind the model to carry on after
             await self.cancel_turn()
             self.turn_task = asyncio.create_task(self._turn(self._with_context(
-                text + "\n\n[Morning briefing in progress: respond to this, then continue with any parts you "
+                text + f"\n\n[{self.morning.part.capitalize()} briefing in progress: respond to this, then continue with any parts you "
                        "haven't covered yet, ending with the video and the song. If it's all done, just respond.]")))
-            return
-        if showcase.is_trigger(text):
-            await self.start_showcase("demo")
             return
         if showcase.is_tour_request(text) and support_available():
             await self.start_showcase("support_tour")
@@ -429,21 +430,24 @@ class Session:
         await self.cancel_turn()  # barge-in
         self.turn_task = asyncio.create_task(self._turn(self._with_context(text)))
 
-    async def start_morning(self) -> None:
-        """'Morning, Jarvis': greet instantly, gather today's data, then let the model run an unscripted briefing."""
+    async def start_morning(self, intro_delay: float = 0.0) -> None:
+        """'Morning / Afternoon / Evening, Jarvis': greet instantly (by the clock), gather the data, then let the model
+        run an unscripted briefing for that time of day. intro_delay: the power-on sequence plays first (data is
+        gathered meanwhile)."""
         await self.cancel_turn()
 
         async def go():
             now = dt.datetime.now(ZoneInfo(settings.timezone))
             weekday = now.weekday() < 5
-            self.morning.start()
+            part = morning.part_of_day(now)
+            self.morning.start(part)
             loop = asyncio.get_running_loop()
             events: asyncio.Queue = asyncio.Queue()
             progress = lambda *a: loop.call_soon_threadsafe(events.put_nowait, a)  # noqa: E731 (called from threads)
-            items = [{"key": k, "label": l} for k, l in morning.SCAN_ITEMS if weekday or k != "trains_to_manhattan"]
+            items = [{"key": k, "label": l} for k, l in morning.SCAN_ITEMS if weekday or k != morning.TRAIN_KEY]
             await self.send({"type": "ui", "op": "clear_cards"})
             await self.send({"type": "morning_scan", "active": True, "items": items})
-            gathering = asyncio.create_task(asyncio.to_thread(morning.gather, weekday, progress))
+            gathering = asyncio.create_task(asyncio.to_thread(morning.gather, weekday, progress, part))
 
             async def relay():  # loading panel ticks + displays, the moment each part lands
                 while True:
@@ -459,10 +463,13 @@ class Session:
                 history = await asyncio.to_thread(morning.recent_history)
                 await asyncio.to_thread(morning.begin_log, now)
                 audio = await self.morning.greeting_audio(self.voice) if self.speak else None
-                await self.send({"type": "assistant_final", "turn_id": "morning_hello", "text": morning.GREETING})
+                if intro_delay:
+                    await asyncio.sleep(intro_delay)
+                greeting = self.morning.greeting
+                await self.send({"type": "assistant_final", "turn_id": "morning_hello", "text": greeting})
                 if audio:
                     await self.state("speaking")
-                    await self.send({"type": "speech", "turn_id": "morning_hello", "seq": 0, "text": morning.GREETING,
+                    await self.send({"type": "speech", "turn_id": "morning_hello", "seq": 0, "text": greeting,
                                      "audio": b64(audio), "mime": "audio/wav"})
                 if filler is not None:
                     line, faudio = await filler
@@ -481,7 +488,7 @@ class Session:
                 relaying.cancel()
             await self.send({"type": "morning_scan", "stage": "composing"})
             try:
-                await self._turn(morning.build_prompt(data, history, now))
+                await self._turn(morning.build_prompt(data, history, now, part))
             finally:
                 await self.send({"type": "morning_scan", "active": False})
         self.turn_task = asyncio.create_task(go())
@@ -529,7 +536,7 @@ class Session:
             await self.send({"type": "card", "turn_id": turn_id, "card": V.card("media_control", "", {"action": "pause"})})
         if music:
             await asyncio.sleep(0.4)
-            await self._announce(intros.get("song") or morning.SONG_INTRO, 1)
+            await self._announce(intros.get("song") or self.morning.song_intro, 1)
             await self.send({"type": "card", "turn_id": turn_id, "card": music[-1]})
 
     def expects_answer(self) -> bool:
@@ -541,7 +548,7 @@ class Session:
         if self.morning.active and self.expects_answer() and not self._busy():
             self.last_reply = ""
             self.turn_task = asyncio.create_task(self._turn(
-                "[No answer from Stephen. Carry on with the rest of the morning briefing from where you left off, "
+                f"[No answer from Stephen. Carry on with the rest of the {self.morning.part} briefing from where you left off, "
                 "without asking again.]"))
 
     async def listen_for_answer(self, timeout_s: float) -> None:
@@ -556,15 +563,12 @@ class Session:
             q.set_result("")
 
     async def start_showcase(self, which: str, intro_delay: float = 0.0) -> None:
-        """The preset demo, or the narrated support-model tour, run as this session's turn (Esc cancels it)."""
+        """The narrated support-model tour, run as this session's turn (Esc cancels it)."""
         await self.cancel_turn()
-        if which == "support_tour":
-            if not support_available():
-                await self.say_line("The support blueprint hasn't been built yet, sir.")
-                return
-            coro = showcase.support_tour(self)
-        else:
-            coro = showcase.run(self, intro_delay=intro_delay)
+        if not support_available():
+            await self.say_line("The support blueprint hasn't been built yet, sir.")
+            return
+        coro = showcase.support_tour(self)
 
         async def guarded():
             self.pending_input = None

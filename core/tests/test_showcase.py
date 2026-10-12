@@ -84,19 +84,6 @@ def test_missing_blueprint(tmp_path, monkeypatch):
     assert not support.available()
 
 
-@pytest.mark.parametrize("text", ["Hey Jarvis, what do you have for me today?", "what do you have for me today",
-                                  "Jarvis, what have you got for me today?", "run the demo", "tell me about my day",
-                                  "Good morning Jarvis, how's my day looking?", "give me my briefing", "brief me on the day"])
-def test_showcase_triggers(text):
-    assert S.is_trigger(text)
-
-
-@pytest.mark.parametrize("text", ["what do you have on my calendar today", "what's on today", "demo day is Friday",
-                                  "do you have the report"])
-def test_showcase_not_triggered(text):
-    assert not S.is_trigger(text)
-
-
 def test_tour_routing():
     assert S.is_tour_request("explain how the 3 tier support system works at Hadrius")
     assert S.is_tour_request("walk me through our support model")
@@ -106,11 +93,9 @@ def test_tour_routing():
     assert not S.is_tour_request("explain this spreadsheet")
 
 
-def test_chunk_text_and_units():
+def test_chunk_text():
     chunks = S.chunk_text("One. " * 120, 100)
     assert all(len(c) <= 100 for c in chunks) and len(chunks) > 3
-    assert S._units("1 hr 5 min, 17 mi") == "1 hour 5 minutes, 17 miles"
-    assert S._co("Apple Inc.") == "Apple" and S._co("Microsoft Corporation") == "Microsoft"
 
 
 class FakeVoice:
@@ -157,90 +142,6 @@ def test_support_tour_drives_tabs(blueprint):
     assert any(m["type"] == "showcase" and not m["active"] for m in s.sent)
 
 
-def _fake_beats(monkeypatch):
-    def mk(label):
-        def b():
-            return S.Beat(label, f"{label} line.", [V.card("notice", label, {"text": label})], after_s=0)
-        return b
-    names = ["_weather", "_mag7", "_btc", "_grandma", "_inbox_clear", "_video", "_music"]
-    fakes = {n: mk(n.strip("_").upper()) for n in names}
-    fakes["_inbox_clear"] = lambda: None  # a beat can opt out
-    fakes["_mag7"] = lambda: (_ for _ in ()).throw(RuntimeError("yahoo down"))  # and fail
-    monkeypatch.setattr(S, "BRIEFING", [fakes[n] for n in names])
-
-
-def _spoken(s):
-    return [m["text"] for m in s.sent if m["type"] == "speech"]
-
-
-def test_briefing_welcome_date_quip_then_beats(monkeypatch):
-    _fake_beats(monkeypatch)
-    s = FakeSession(answer="It was okay.")
-    asyncio.run(S.run(s))
-    lines = _spoken(s)
-    assert lines[0] == S.ASK_DATE
-    assert lines[1] in S.DATE_QUIPS["meh"]
-    assert lines[2:] == ["WEATHER line.", "BTC line.", "GRANDMA line.", "VIDEO line.", "MUSIC line."]
-    assert S.ASK_PREP not in lines  # the meeting-prep question is skipped
-    assert s.listened == [S.ASK_DATE_LISTEN_S] and s.pending_input is None
-    order = [m["type"] for m in s.sent if m["type"] in ("card", "speech")]
-    assert order[2:4] == ["card", "speech"]  # each beat's display lands before its line
-    assert s.sent[-1] == {"type": "state", "state": "idle"}
-
-
-def test_briefing_silence_gets_a_quip_and_carries_on(monkeypatch):
-    _fake_beats(monkeypatch)
-    monkeypatch.setattr(S, "ASK_DATE_LISTEN_S", 0.05)
-    s = FakeSession(answer="")
-    asyncio.run(S.run(s))
-    lines = _spoken(s)
-    assert lines[1] in S.DATE_QUIPS["none"] and lines[-2:] == ["VIDEO line.", "MUSIC line."]
-
-
-@pytest.mark.parametrize("text,kind", [("It was okay.", "meh"), ("it was ok i guess", "meh"), ("not bad", "meh"),
-                                       ("It was amazing!", "good"), ("pretty terrible", "bad"), ("not great", "bad"),
-                                       ("", "none"), ("we went bowling", "other")])
-def test_date_kind(text, kind):
-    assert S.date_kind(text) == kind
-    assert S.date_quip(text) in S.DATE_QUIPS[kind]
-
-
-@pytest.mark.parametrize("text,kind", [("no", "no"), ("No, not yet.", "no"), ("not yet", "no"), ("nope", "no"),
-                                       ("no thanks", "no"), ("maybe later", "no"), ("yes", "yes"),
-                                       ("Sure, the 12 o'clock", "yes"), ("what's on at noon?", "")])
-def test_prep_answer(text, kind):
-    assert S.prep_answer(text) == kind
-
-
-def test_btc_quip_varies_with_move():
-    calm, rally, crash = S._btc_quip(1, 0.2, 0), S._btc_quip(1, 7, 0), S._btc_quip(1, -8, 0)
-    assert len({calm, rally, crash}) == 3
-
-
-def test_showcase_cancel_is_clean(monkeypatch):
-    def slow():
-        import time
-        time.sleep(0.05)
-        return S.Beat("X", "x.", [])
-    monkeypatch.setattr(S, "BRIEFING", [slow] * 6)
-    s = FakeSession()
-
-    async def go():
-        t = asyncio.create_task(S.run(s))
-        await asyncio.sleep(0.25)
-        t.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await t
-    asyncio.run(go())
-    assert any(m["type"] == "showcase" and not m["active"] for m in s.sent)
-
-
-def test_speech_helpers():
-    assert S._first("Jordan Talbot") == "Jordan" and S._first("Vercel") == "Vercel" and S._first("Example Wealth Team") == "Example Wealth Team"
-    assert S._sentence("Update default payment method on AWS Account 123456789012") == "update default payment method on AWS"
-    assert S._join(["a", "b", "c"]) == "a, b and c" and S._join(["a"]) == "a"
-
-
 def test_car_listing_parse():
     from jarvis_google import cars
     card = ('<div data-x="1" class=" article-search-result search-result clearfix" data-listing-url="https://example.com/l?a=1&amp;b=2">'
@@ -269,7 +170,7 @@ def test_home_location_overrides_ip(monkeypatch):
 
 @pytest.mark.parametrize("text,kind", [("Wake up, Daddy's home.", "morning"), ("wake up daddy is home", "morning"),
                                        ("Wake up. Dad's home!", "morning"), ("wakeup daddies home", "morning"),
-                                       ("Morning, Jarvis.", "hello"),
+                                       ("Morning, Jarvis.", "hello"), ("Good evening, Jarvis", "hello"),
                                        ("Hey Jarvis", "wake"), ("hey jarvis what time is it", "wake"),
                                        ("morning everyone", None), ("pass the salt", None), ("", None)])
 def test_sleep_word(text, kind):
@@ -301,8 +202,8 @@ class SleepSession(FakeSession):
         self.sent.append({"type": "system_line", "text": text})
         self._played.set()
 
-    async def start_showcase(self, which, intro_delay=0.0):
-        self.started.append((which, intro_delay))
+    async def start_morning(self, intro_delay=0.0):
+        self.started.append(("briefing", intro_delay))
 
     async def state(self, s):
         self._state = s
@@ -316,7 +217,7 @@ def test_sleep_then_morning_powers_on():
     asyncio.run(s.power_on())
     assert not s.sleeping and not s.mic.sleeping
     kinds = [m["type"] for m in s.sent]
-    assert kinds.index("power_on") < len(kinds) and s.started == [("demo", S.POWER_ON_S)]
+    assert kinds.index("power_on") < len(kinds) and s.started == [("briefing", S.POWER_ON_S)]
 
 
 def test_hey_jarvis_wakes_without_cinematic():

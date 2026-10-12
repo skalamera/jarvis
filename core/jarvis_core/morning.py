@@ -1,11 +1,11 @@
-"""'Morning, Jarvis': the unscripted daily briefing.
+"""'Morning / Afternoon / Evening, Jarvis': the unscripted briefing, shaped by the time of day.
 
-Nothing here is a script. Core greets him instantly ("Good morning, sir."), gathers today's real data in parallel
-(weather, the New Rochelle -> Manhattan trains on weekdays, both calendars incl. yesterday and tomorrow, what needs
-his attention, markets, BTC / ETH, tonight's big games), shows the displays, and hands everything to the model with a
-brief: talk it through in Jarvis's voice, decide for itself which quips and which (if any) questions fit today, then
-close with a topical recent YouTube video and a Guardians-of-the-Galaxy-style song. A small log of past mornings keeps
-the songs, videos and questions from repeating.
+Nothing here is a script. Core greets him instantly ("Good morning / afternoon / evening, sir.", by the clock), gathers
+the real data in parallel (weather, weekday trains: into Manhattan in the morning, home to New Rochelle later, both
+calendars incl. yesterday and tomorrow, what needs his attention, markets, BTC / ETH, the day's big games), shows the
+displays, and hands everything to the model with a brief: talk it through in Jarvis's voice, decide for itself which
+quips and which (if any) questions fit, then close with a topical recent YouTube video and a Guardians-of-the-Galaxy-
+style song. A small log of past briefings keeps the songs, videos and questions from repeating.
 """
 from __future__ import annotations
 
@@ -27,20 +27,58 @@ from .config import settings
 
 log = logging.getLogger("jarvis.morning")
 
-GREETING = "Good morning, sir."
+PARTS = ("morning", "afternoon", "evening")
+
+
+def part_of_day(now: dt.datetime) -> str:
+    """'morning' before noon, 'afternoon' until 5 pm, then 'evening' (same split as quick.py)."""
+    return "morning" if now.hour < 12 else "afternoon" if now.hour < 17 else "evening"
+
+
+GREETINGS = {p: f"Good {p}, sir." for p in PARTS}
+GREETING = GREETINGS["morning"]
 # Said right after the greeting while the data loads (never data itself, so nothing is repeated later).
-FILLERS = [
-    "Bear with me a moment while I pull your day together.",
-    "One moment, sir. I'm just going through your calendars and the overnight news.",
-    "Just reviewing what happened while you slept, sir.",
-    "Give me a few seconds. The markets and your inbox both had a busy night.",
-    "Compiling everything now, sir. Coffee, perhaps, in the meantime?",
-    "Right. Let me see what the world has been up to.",
-]
+FILLERS = {
+    "morning": [
+        "Bear with me a moment while I pull your day together.",
+        "One moment, sir. I'm just going through your calendars and the overnight news.",
+        "Just reviewing what happened while you slept, sir.",
+        "Give me a few seconds. The markets and your inbox both had a busy night.",
+        "Compiling everything now, sir. Coffee, perhaps, in the meantime?",
+        "Right. Let me see what the world has been up to.",
+    ],
+    "afternoon": [
+        "Bear with me a moment while I pull the rest of your day together.",
+        "One moment, sir. I'm just going through your calendars and the morning's news.",
+        "Just catching up on what happened while you were busy, sir.",
+        "Give me a few seconds. The markets and your inbox have both had a busy morning.",
+        "Compiling everything now, sir. A late lunch, perhaps, in the meantime?",
+        "Right. Let me see what the world has been up to since this morning.",
+    ],
+    "evening": [
+        "Bear with me a moment while I wrap up your day.",
+        "One moment, sir. I'm just going through your calendars and today's news.",
+        "Just reviewing how the day went, sir.",
+        "Give me a few seconds. The markets and your inbox both had a busy day.",
+        "Compiling everything now, sir. A drink, perhaps, in the meantime?",
+        "Right. Let me see what the world got up to today.",
+    ],
+}
+TRAIN_KEY = "trains"
 # What the HUD's loading panel lists (key -> label), in display order.
-SCAN_ITEMS = [("weather", "WEATHER"), ("trains_to_manhattan", "TRAINS"), ("calendar", "CALENDARS"),
+SCAN_ITEMS = [("weather", "WEATHER"), (TRAIN_KEY, "TRAINS"), ("calendar", "CALENDARS"),
               ("needs_attention", "INBOX"), ("markets", "MARKETS"), ("crypto", "CRYPTO"), ("sports", "SPORTS")]
-SONG_INTRO = "And here's something to start your day, sir."
+SONG_INTROS = {"morning": "And here's something to start your day, sir.",
+               "afternoon": "And here's something to carry you through the afternoon, sir.",
+               "evening": "And here's something to unwind with, sir."}
+SONG_INTRO = SONG_INTROS["morning"]
+NEW_ROCHELLE = "New Rochelle Station, New Rochelle, NY"
+GRAND_CENTRAL = "Grand Central Terminal, New York, NY"
+
+
+def train_leg(part: str) -> tuple[str, str]:
+    """(origin, destination): into Manhattan in the morning, home to New Rochelle in the afternoon / evening."""
+    return (NEW_ROCHELLE, GRAND_CENTRAL) if part == "morning" else (GRAND_CENTRAL, NEW_ROCHELLE)
 _TAG = re.compile(r"\[\[\s*(VIDEO|SONG)(_INTRO)?\s*:\s*(.*?)\s*\]\]", re.I | re.S)
 PAUSE_MARK = "PAUSEMARK."      # a paragraph break in the briefing -> a beat of silence between sections
 PAUSE_S = 0.75
@@ -136,14 +174,16 @@ LOG_PATH = store.STATE_DIR / "morning_log.json"
 GATHER_TIMEOUT_S = 14.0
 ACTIVE_FOR_S = 25 * 60  # a briefing (with his answers in between) is over after this long, whatever happened
 
-_HELLO = re.compile(r"^\W*(?:(?:good|top of the)\s+)?morning[\s,.!]*(?:jarvis|jarvas|jervis|travis)\W*$"
-                    r"|^\W*(?:jarvis|jervis)[\s,.!]+(?:good\s+)?morning\W*$", re.I)
-_HELLO_LOOSE = re.compile(r"\b(?:good\s+)?morning[\s,.!]*(?:jarvis|jarvas|jervis|travis)\b"
-                          r"|\b(?:jarvis|jervis)[\s,.!]+(?:good\s+)?morning\b", re.I)
+_TOD = r"(?:morning|afternoon|evening)"
+_HELLO = re.compile(r"^\W*(?:(?:good|top of the)\s+)?" + _TOD + r"[\s,.!]*(?:jarvis|jarvas|jervis|travis)\W*$"
+                    r"|^\W*(?:jarvis|jervis)[\s,.!]+(?:good\s+)?" + _TOD + r"\W*$", re.I)
+_HELLO_LOOSE = re.compile(r"\b(?:good\s+)?" + _TOD + r"[\s,.!]*(?:jarvis|jarvas|jervis|travis)\b"
+                          r"|\b(?:jarvis|jervis)[\s,.!]+(?:good\s+)?" + _TOD + r"\b", re.I)
 
 
 def is_hello(text: str) -> bool:
-    """'Morning, Jarvis' / 'Good morning, Jarvis' on its own (typed or said while awake)."""
+    """'Morning, Jarvis' / 'Good afternoon, Jarvis' / 'Evening, Jarvis' on its own (typed or said while awake).
+    Which briefing runs is decided by the clock, not the word he used."""
     return bool(_HELLO.search(text or ""))
 
 
@@ -169,9 +209,10 @@ def _weather() -> dict:
             "next_hours": hourly, "tomorrow": {k: (daily[1] if len(daily) > 1 else {}).get(k) for k in ("hi", "lo", "condition", "pop")}}
 
 
-def _trains() -> dict:
+def _trains(part: str = "morning") -> dict:
     from jarvis_google import routes as RT
-    r = RT.directions("Grand Central Terminal, New York, NY", "New Rochelle Station, New Rochelle, NY", "transit")
+    origin, dest = train_leg(part)
+    r = RT.directions(dest, origin, "transit")
     out = []
     for rt in (r.get("routes") or [])[:3]:
         legs = [s["transit"] for s in rt.get("steps") or [] if s.get("transit")]
@@ -179,7 +220,8 @@ def _trains() -> dict:
             out.append({"line": legs[0].get("line_name") or legs[0].get("line"), "departs": legs[0].get("depart"),
                         "from": legs[0].get("from"), "arrives": legs[-1].get("arrive"), "to": legs[-1].get("to"),
                         "door_to_door": rt.get("duration"), "transfers": max(0, len(legs) - 1)})
-    return {"from": "New Rochelle", "to": "Grand Central", "next_trains": out}
+    names = {NEW_ROCHELLE: "New Rochelle", GRAND_CENTRAL: "Grand Central"}
+    return {"from": names[origin], "to": names[dest], "next_trains": out}
 
 
 def _events(acct: str, a: dt.datetime, b: dt.datetime) -> list[dict]:
@@ -319,7 +361,7 @@ def _cards(fn, *a) -> list[dict]:
     return out
 
 
-def gather(weekday: bool, progress: Callable[..., None] | None = None) -> tuple[dict, list[dict]]:
+def gather(weekday: bool, progress: Callable[..., None] | None = None, part: str = "morning") -> tuple[dict, list[dict]]:
     """Today's data (each section independently; a failure becomes {'error': ...}) + displays for the HUD.
     progress("item", name, ok) as each section lands; progress("cards", [cards]) as each display is ready."""
     note = progress or (lambda *a: None)
@@ -329,11 +371,11 @@ def gather(weekday: bool, progress: Callable[..., None] | None = None) -> tuple[
     parts = {"weather": _weather, "calendar": _calendar, "needs_attention": _attention, "markets": _markets,
              "crypto": _crypto, "sports": _sports}
     if weekday:
-        parts["trains_to_manhattan"] = _trains
+        parts[TRAIN_KEY] = lambda: _trains(part)
     shows = [(T.weather_lookup, "", 5, ""), (MK.crypto_quote, "bitcoin", "1M")]
     if weekday:
-        shows.insert(1, (RT.directions, "Grand Central Terminal, New York, NY", "New Rochelle Station, New Rochelle, NY",
-                         "transit"))
+        origin, dest = train_leg(part)
+        shows.insert(1, (RT.directions, dest, origin, "transit"))
     data: dict[str, Any] = {}
     cards: list[dict] = []
     with ThreadPoolExecutor(len(parts) + len(shows)) as ex:
@@ -404,33 +446,83 @@ _MOODS = ["brisk and efficient, a touch dry", "warm and a little chatty", "extra
           "upbeat, like a man who's had his coffee", "understated, quietly amused"]
 
 
-def build_prompt(data: dict, history: list[dict], now: dt.datetime) -> str:
+# Everything in the brief that depends on the time of day.
+_TOD_BRIEF = {
+    "morning": {
+        "said": "Morning, Jarvis", "tag": "MORNING BRIEFING", "go": "go straight into the day",
+        "trains": "the next trains from New Rochelle into Grand Central (just the useful one or two)",
+        "weather": "the weather (what to wear / umbrella if it matters)",
+        "calendar": "a summary of today on BOTH calendars (personal and work), merged",
+        "markets": "the markets (major indices and anything notable)",
+        "look_back": "If YESTERDAY had a notable PERSONAL event (a date, dinner, party, trip, concert, game, family "
+                     "visit, appointment), you may casually ask how it went.",
+        "look_ahead": "Tomorrow's notable events can be a light heads-up.",
+        "prep": "If a work meeting today looks genuinely important",
+        "song": "a song to start the day", "song_eg": "And here's something to start your day, sir.",
+        "recent": "RECENT MORNINGS",
+    },
+    "afternoon": {
+        "said": "Good afternoon, Jarvis", "tag": "AFTERNOON BRIEFING", "go": "go straight into the rest of the day",
+        "trains": "the next trains home from Grand Central to New Rochelle (just the useful one or two)",
+        "weather": "the weather for the rest of the afternoon and this evening (umbrella or a jacket if it matters)",
+        "calendar": "what's LEFT of today on BOTH calendars (personal and work), merged, skipping anything already over",
+        "markets": "the markets so far today (major indices mid-session and anything notable; if they're closed, how "
+                   "they finished)",
+        "look_back": "If something notable and PERSONAL happened earlier TODAY or YESTERDAY (a date, lunch, party, "
+                     "trip, game, family visit, appointment), you may casually ask how it went.",
+        "look_ahead": "This evening's and tomorrow's notable events can be a light heads-up.",
+        "prep": "If a work meeting still to come today looks genuinely important",
+        "song": "a song for the afternoon", "song_eg": "And here's something to carry you through the afternoon, sir.",
+        "recent": "RECENT BRIEFINGS",
+    },
+    "evening": {
+        "said": "Good evening, Jarvis", "tag": "EVENING BRIEFING", "go": "go straight into the wrap-up",
+        "trains": "the next trains home from Grand Central to New Rochelle, only if it's still a sensible hour to be "
+                  "commuting (otherwise skip them)",
+        "weather": "the weather tonight and tomorrow (what to expect in the morning)",
+        "calendar": "anything still to come tonight on BOTH calendars (personal and work), then a preview of "
+                    "TOMORROW's calendar, merged",
+        "markets": "how the markets closed today (major indices and anything notable)",
+        "look_back": "If something notable and PERSONAL happened TODAY (a date, dinner, party, trip, game, family "
+                     "visit, appointment), you may casually ask how it went.",
+        "look_ahead": "Tomorrow gets more weight than usual: anything early or important deserves a clear heads-up.",
+        "prep": "If a work meeting tomorrow looks genuinely important",
+        "song": "a song to unwind with", "song_eg": "And here's something to unwind with, sir.",
+        "recent": "RECENT BRIEFINGS",
+    },
+}
+
+
+def build_prompt(data: dict, history: list[dict], now: dt.datetime, part: str | None = None) -> str:
+    part = part or part_of_day(now)
+    b = _TOD_BRIEF[part]
     seed = int(hashlib.sha256(now.strftime("%Y-%m-%d").encode()).hexdigest(), 16)
-    mood = _MOODS[seed % len(_MOODS)]
+    mood = _MOODS[(seed + PARTS.index(part)) % len(_MOODS)]
     weekday = now.weekday() < 5
     payload = json.dumps(data, default=str, separators=(",", ":"))
-    return f"""[MORNING BRIEFING] Stephen just said "Morning, Jarvis". You ALREADY greeted him out loud with "Good morning, sir." Do not greet him again: go straight into the day.
+    return f"""[{b["tag"]}] Stephen just said "{b["said"]}". You ALREADY greeted him out loud with "{GREETINGS[part]}" Do not greet him again: {b["go"]}.
 
-It is {now.strftime("%A, %B")} {now.day}, {now.strftime("%Y")}, {now.strftime("%I:%M %p").lstrip("0")} in New Rochelle, NY ({"a weekday" if weekday else "the weekend"}). Today's tone: {mood}.
+It is {now.strftime("%A, %B")} {now.day}, {now.strftime("%Y")}, {now.strftime("%I:%M %p").lstrip("0")} in New Rochelle, NY ({"a weekday" if weekday else "the weekend"}), so this is the {part} briefing. Tone: {mood}.
 
 DATA (fetched seconds ago from his real accounts and live feeds; the HUD is already showing weather{", trains" if weekday else ""} and Bitcoin):
 {payload}
 
-RECENT MORNINGS (do not repeat these songs or videos): {json.dumps(history, default=str)}
+{b["recent"]} (do not repeat these songs or videos): {json.dumps(history, default=str)}
 
 HOW TO RUN IT
 - This is spoken aloud. Plain sentences, no lists, no markdown, no emojis. Put each part (weather, trains, calendar, inbox, markets, crypto, ...) in its own short paragraph with a blank line between them: Jarvis pauses briefly at each break.
 - Write the whole briefing straight away. Do NOT call any tools for the briefing (everything is in DATA; the video and song are handled by tags, below), so he isn't kept waiting. Round numbers ("about 64", "up 1.2 percent", "BTC at 82.8 thousand"). Keep each part to a sentence or two; the whole thing should feel like a quick, natural chat, not a report.
-- Cover, in a natural order: the weather (what to wear / umbrella if it matters); {"the next trains from New Rochelle into Grand Central (just the useful one or two)" if weekday else "no train info, it's the weekend"}; a summary of today on BOTH calendars (personal and work), merged, highlighting what matters and skipping noise like optional office hours; anything that needs his immediate attention (if nothing does, say so in a few words); the markets (major indices and anything notable); BTC and ETH.
-- Be aware of the surrounding days. If YESTERDAY had a notable PERSONAL event (a date, dinner, party, trip, concert, game, family visit, appointment), you may casually ask how it went. Ignore routine work events. Most days there is nothing to mention; never invent anything. Tomorrow's notable events can be a light heads-up.
-- If a work meeting today looks genuinely important (external attendees / client domains, interviews, exec or board meetings, demos, presentations, reviews), you may offer to help him prep.
+- It's the {part}: everything you say should fit this time of day (no "start your day" in the evening, no "overnight" in the afternoon).
+- Cover, in a natural order: {b["weather"]}; {b["trains"] if weekday else "no train info, it's the weekend"}; {b["calendar"]}, highlighting what matters and skipping noise like optional office hours; anything that needs his immediate attention (if nothing does, say so in a few words); {b["markets"]}; BTC and ETH.
+- Be aware of the surrounding days. {b["look_back"]} Ignore routine work events. Most days there is nothing to mention; never invent anything. {b["look_ahead"]}
+- {b["prep"]} (external attendees / client domains, interviews, exec or board meetings, demos, presentations, reviews), you may offer to help him prep.
 - Quips: one to three dry, British, Jarvis-style asides tied to the actual data (the weather, a market move, crypto, his calendar). Never forced, never the same joke twice in a row.
-- Questions: decide for yourself. Ask zero, one, or at most two questions over the whole briefing, only where useful or natural (how yesterday's event went, offer to prep a meeting, offer to draft a reply to an urgent email, a clarifying question). Some days ask none. When you ask, END your message on the question and stop there (no closing tags in that message); he will answer. Then react briefly (a quip if it fits), help if he said yes (or say you'll get to it right after the briefing), and carry on with the parts you haven't covered yet. If he didn't answer, just carry on.
-- Closing (always last, after everything else): 1) pick ONE YouTube video relevant to today specifically: a big event today (a final, a launch, an election), a strong market or crypto move, a major headline, or failing that his interests (cars, especially his Mercedes CL600 and V12s; SpaceX and Starship; crypto and markets; AI and tech; the Chicago Bears). 2) Pick a song to start the day in the spirit of the Guardians of the Galaxy Awesome Mix (60s-80s feel-good pop, rock, soul, funk; not one of the soundtrack's own songs every day, and not one from RECENT MORNINGS). Do NOT call youtube_video or music_play, and do NOT introduce them in your spoken text. Instead, end that final message with these four tags, each on its own line, as the very last thing:
+- Questions: decide for yourself. Ask zero, one, or at most two questions over the whole briefing, only where useful or natural (how a recent event went, offer to prep a meeting, offer to draft a reply to an urgent email, a clarifying question). Some days ask none. When you ask, END your message on the question and stop there (no closing tags in that message); he will answer. Then react briefly (a quip if it fits), help if he said yes (or say you'll get to it right after the briefing), and carry on with the parts you haven't covered yet. If he didn't answer, just carry on.
+- Closing (always last, after everything else): 1) pick ONE YouTube video relevant to today specifically: a big event today (a final, a launch, an election), a strong market or crypto move, a major headline, or failing that his interests (cars, especially his Mercedes CL600 and V12s; SpaceX and Starship; crypto and markets; AI and tech; the Chicago Bears). 2) Pick {b["song"]} in the spirit of the Guardians of the Galaxy Awesome Mix (60s-80s feel-good pop, rock, soul, funk; suited to the {part}; not one of the soundtrack's own songs every time, and not one from {b["recent"]}). Do NOT call youtube_video or music_play, and do NOT introduce them in your spoken text. Instead, end that final message with these four tags, each on its own line, as the very last thing:
   [[VIDEO: a specific YouTube search query | week]]   (use "| day" for breaking news, "| any" for something evergreen)
-  [[VIDEO_INTRO: one short spoken sentence introducing it and why it fits today, e.g. "Here's a video on the Bears and Packers rivalry ahead of this afternoon, for later."]]
+  [[VIDEO_INTRO: one short spoken sentence introducing it and why it fits today, e.g. "Here's a video on the Bears and Packers rivalry ahead of Sunday, for later."]]
   [[SONG: Artist - Song title]]
-  [[SONG_INTRO: one short line before the song, e.g. "And here's something to start your day, sir." (vary it; you may name the song)]]
+  [[SONG_INTRO: one short line before the song, e.g. "{b["song_eg"]}" (vary it; you may name the song)]]
   When you've finished speaking, Jarvis says the video line, shows the video (paused for later), says the song line and starts the song.
 - Accuracy matters more than flourish: read dates and labels in DATA carefully (e.g. a game "TODAY" vs a previous result) and never state anything DATA doesn't support.
 - Use the DATA above; don't re-fetch it. Only call tools if he asks for something or you're helping him with a task. If a section has an "error", skip it quietly (or mention it in a few words if it matters).
@@ -439,13 +531,14 @@ HOW TO RUN IT
 
 # ---------------------------------------------------------------- runner
 class Morning:
-    """Per-session state: is a morning briefing in progress (so a question gets a longer listen, and silence after
+    """Per-session state: is a briefing (morning / afternoon / evening) in progress (so a question gets a longer listen, and silence after
     a question continues the briefing)."""
 
     def __init__(self) -> None:
         self.active_until = 0.0
-        self._greet_audio: bytes | None = None
+        self._greet_audio: dict[str, bytes] = {}
         self._fillers: dict[str, bytes] = {}
+        self.part = "morning"
 
     @property
     def active(self) -> bool:
@@ -454,8 +547,8 @@ class Morning:
     def finish(self) -> None:
         self.active_until = 0.0
 
-    async def filler_audio(self, voice) -> tuple[str, bytes | None]:
-        line = random.choice(FILLERS)
+    async def filler_audio(self, voice, part: str | None = None) -> tuple[str, bytes | None]:
+        line = random.choice(FILLERS[part or self.part])
         if line not in self._fillers:
             try:
                 self._fillers[line] = await voice.tts(line)
@@ -464,15 +557,26 @@ class Morning:
                 return line, None
         return line, self._fillers[line]
 
-    async def greeting_audio(self, voice) -> bytes | None:
-        if self._greet_audio is None:
+    @property
+    def greeting(self) -> str:
+        return GREETINGS[self.part]
+
+    @property
+    def song_intro(self) -> str:
+        return SONG_INTROS[self.part]
+
+    async def greeting_audio(self, voice, part: str | None = None) -> bytes | None:
+        part = part or self.part
+        if part not in self._greet_audio:
             try:
-                self._greet_audio = await voice.tts(GREETING)
+                self._greet_audio[part] = await voice.tts(GREETINGS[part])
             except Exception as e:
                 log.warning("greeting tts: %s", e)
-        return self._greet_audio
+                return None
+        return self._greet_audio[part]
 
-    def start(self) -> None:
+    def start(self, part: str = "morning") -> None:
+        self.part = part if part in PARTS else "morning"
         self.active_until = time.time() + ACTIVE_FOR_S
         self.deferred = {}
 
